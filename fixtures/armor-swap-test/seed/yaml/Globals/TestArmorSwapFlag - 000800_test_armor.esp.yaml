@@ -1,0 +1,9 @@
+MutagenObjectType: GlobalInt
+FormKey: 000800:test_armor.esp
+MajorRecordFlagsRaw: 64
+EditorID: TestArmorSwapFlag
+Fallout4MajorRecordFlags:
+- 0x40
+MajorFlags:
+- Constant
+Data: 1

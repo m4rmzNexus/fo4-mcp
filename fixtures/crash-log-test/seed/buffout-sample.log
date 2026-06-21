@@ -1,0 +1,43 @@
+Fallout 4 v1.10.984
+Buffout 4 v1.28.6 Apr  3 2024 22:39:39
+
+Unhandled exception "EXCEPTION_ACCESS_VIOLATION" at 0x7FF6B1234567 Fallout4.exe+1234567
+
+[Compatibility]
+F4EE: false
+
+[Crashlog]
+SETTINGS:
+[Compatibility] F4EE: false
+[Fixes] ActorIsHostileToActor: true
+[Fixes] CellInit: true
+[Patches] LibDeflate: true
+
+SYSTEM SPECS:
+	OS: Microsoft Windows 11 Pro v10.0.26200
+	CPU: AuthenticAMD AMD Ryzen 7 7800X3D 8-Core Processor
+	GPU #1: NVIDIA GeForce RTX 4080
+
+PROBABLE CALL STACK:
+	[0]	0x7FF6B1234567	Fallout4.exe+1234567	-> 12345+0x0
+	[1]	0x7FF6B1234600	Fallout4.exe+1234600	-> 12346+0x0
+
+MODULES:
+	Fallout4.exe	0x7FF6B0000000
+	f4se_1_10_984.dll	0x7FFE12340000
+	buffout4.dll	0x7FFE12350000
+
+XSE PLUGINS:
+	Buffout4.dll v1.28.6
+	mcm.dll v1.39.0
+
+PLUGINS:
+	[00]	Fallout4.esm
+	[01]	DLCRobot.esm
+	[02]	DLCworkshop01.esm
+	[03]	DLCCoast.esm
+	[04]	DLCworkshop02.esm
+	[05]	DLCworkshop03.esm
+	[06]	DLCNukaWorld.esm
+	[FE:000]	MyTestArmor.esl
+	[FF]	Fallout4.esm

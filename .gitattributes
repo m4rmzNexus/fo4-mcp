@@ -1,0 +1,29 @@
+# Normalize line endings in the repo (LF) while checking out native per OS.
+* text=auto
+
+# Windows-only scripts stay CRLF so pwsh/cmd are happy.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Source/text formats (explicit so they're never mistaken for binary).
+*.psc  text
+*.py   text
+*.toml text
+*.yaml text
+*.yml  text
+*.md   text
+
+# Bethesda plugin + compiled / asset formats: binary (no eol munging, no
+# bogus textual diffs).
+*.esp binary
+*.esl binary
+*.esm binary
+*.ba2 binary
+*.bsa binary
+*.pex binary
+*.bin binary
+*.nif binary
+*.dds binary
+*.fuz binary
+*.lip binary

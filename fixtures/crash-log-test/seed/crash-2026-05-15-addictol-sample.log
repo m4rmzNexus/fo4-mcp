@@ -1,0 +1,18 @@
+Fallout 4 v1.10.984
+Addictol v1.2.0
+
+Unhandled exception "EXCEPTION_ACCESS_VIOLATION" at 0x7FF6A2D5FE96 Fallout4.exe+2D5FE96
+
+PROBABLE CALL STACK:
+	[0] 0x7FF6A2D5FE96 Fallout4.exe+2D5FE96
+	[1] 0x7FFE99887766 Workshop Framework.dll+0007766
+
+XSE PLUGINS:
+	f4se_1_10_984.dll v0.7.2
+	Addictol.dll v1.2.0
+
+PLUGINS:
+	[00]     Fallout4.esm
+	[01]     DLCRobot.esm
+	[FE:001] WorkshopFramework.esm
+	[05]     SomeUserMod.esp

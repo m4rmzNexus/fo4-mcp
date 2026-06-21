@@ -1,0 +1,30 @@
+Fallout 4 v1.11.191
+Addictol v1.2.0 (Buffout 4 NG-fork) 2025-09-12
+
+Unhandled exception "EXCEPTION_ACCESS_VIOLATION" at 0x7FF6C0001234 Fallout4.exe+0001234
+
+CRASH GENERATOR ON FALLOUT 4 NG (AE-EQUIVALENT). Format diverges from
+upstream Buffout 4 in two ways noted by CLASSIC v9:
+  - "MODULES" section formatted as a JSON-line list rather than tab-aligned text
+  - PLUGINS index labels use [hex:dec] tuples (NG mixed-load-order disambiguation)
+
+PROBABLE CALL STACK:
+	[ 0]	0x7FF6C0001234	Fallout4.exe	+ 0x001234
+	[ 1]	0x7FFE2A000abc	f4se_1_11_191.dll	+ 0x000abc
+
+MODULES:
+	{"name":"Fallout4.exe","base":"0x7FF6C0000000","size":33554432}
+	{"name":"f4se_1_11_191.dll","base":"0x7FFE2A000000","size":1048576}
+	{"name":"Addictol.dll","base":"0x7FFE2A100000","size":524288}
+
+XSE PLUGINS:
+	Addictol.dll v1.2.0
+	po3_SpellPerkItemDistributorF4.dll v3.1.1
+	po3_BaseObjectSwapperF4.dll v2.2.1
+
+PLUGINS:
+	[00:000]	Fallout4.esm
+	[01:001]	DLCRobot.esm
+	[02:002]	DLCCoast.esm
+	[03:003]	DLCNukaWorld.esm
+	[FE:000]	MyTestArmor.esl

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: mcp-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install (editable + dev extras)
+        run: pip install -e ".[dev]"
+      - name: Run tests
+        # Tests that need the external toolchain (Spriggit, .NET 9, mutagen-cli,
+        # Caprica, JDK, MO2) are pytest.skip-gated — those binaries are absent in
+        # CI, so this run exercises the pure-Python suite. Toolchain integration
+        # is validated locally (see TASKS.md).
+        run: pytest -q
+
+  license-firewall:
+    name: GPL-import firewall (Karar 7)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Forbid in-process GPL imports under mcp-server/
+        shell: bash
+        run: |
+          # Karar 7, Kural 1: GPL-3.0 tools (Mutagen/Spriggit/Synthesis/BodySlide/
+          # MO2/LOOT/...) are invoked subprocess-only via subprocess_wrap.run_tool().
+          # No in-process import and no pythonnet/clr linking — that would pull the
+          # GPL into this MIT codebase. See docs/karar-7-license-strategy.md.
+          if grep -rnE '^[[:space:]]*(import|from)[[:space:]]+(mutagen|spriggit|synthesis)\b|^[[:space:]]*import[[:space:]]+clr\b|clr\.AddReference|pythonnet' mcp-server/fo4_mcp; then
+            echo "::error::Forbidden in-process GPL import under mcp-server/fo4_mcp (Karar 7). Use subprocess_wrap.run_tool() instead."
+            exit 1
+          fi
+          echo "OK — no in-process GPL imports; firewall intact."
+
+  privacy-guard:
+    name: Privacy regression guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Forbid re-introduced personal info
+        shell: bash
+        run: |
+          # Keep the pre-public scrub from regressing. The bare 'm4rmz' handle in
+          # LICENSE / pyproject.toml is the intentional public author identity and
+          # does NOT match these patterns (email / account / hostname / user-path).
+          # Exclude this workflow file itself — it necessarily contains the patterns.
+          if git grep -nIE '@pm\.me|m4rmz@|LastStalker|M4RMZ-HOME|Users.m4rmz' -- . ':(exclude).github/workflows/ci.yml'; then
+            echo "::error::Personal-info leak re-introduced (email / Nexus account / hostname / Windows user path)."
+            exit 1
+          fi
+          echo "OK — no personal-info leaks."

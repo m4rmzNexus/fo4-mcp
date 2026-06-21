@@ -1,0 +1,116 @@
+# Generated and staging outputs (never commit these)
+staging/
+generated/
+
+# Logs
+*.log
+logs/
+# ...but commit fixture crash logs (test inputs).
+!fixtures/**/*.log
+
+# Claude Code machine-local cache (settings.json itself is shareable; .local.json is per-machine)
+.claude/settings.local.json
+.claude/.credentials.json
+# skill discovery junctions -> repo skills/ (local convenience, not committed; see skills/README.md)
+.claude/skills/
+
+# IDE / editor state
+.vs/
+.vscode/
+.idea/
+*.swp
+*.user
+
+# OS junk
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Build artifacts (.NET, Python, Node)
+bin/
+obj/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+dist/
+build/
+
+# Secrets (defensive — should never exist anyway)
+*.env
+.env.*
+!.env.example
+secrets/
+
+# FO4 binary asset bloat (defensive — fixtures/ should hold only minimal samples)
+fixtures/**/*.ba2
+fixtures/**/*.bsa
+fixtures/**/*.nif
+fixtures/**/*.dds
+fixtures/**/*.hkx
+fixtures/**/*.fuz
+fixtures/**/*.lip
+
+# Third-party tool binaries — downloaded, not committed.
+# Allowlist manifest + manual-download instructions so they ship with the repo.
+tools/*
+!tools/README.md
+!tools/MANIFEST.md
+!tools/MANUAL-DOWNLOADS.txt
+!tools/.gitkeep
+!tools/fetch-tools.ps1
+!tools/extract-tools.ps1
+!tools/fetch-nexus.py
+!tools/extract-nexus.py
+# mutagen-cli: version-control the small source (reproducible build),
+# ignore the published binaries + bin/obj.
+!tools/mutagen-cli/
+tools/mutagen-cli/*
+!tools/mutagen-cli/src/
+tools/mutagen-cli/src/*
+!tools/mutagen-cli/src/Program.cs
+!tools/mutagen-cli/src/Mutagen.RecordQuery.csproj
+# resaver-shim: version-control the small Java source, ignore the built jar +
+# build/ (and the JDK + ReSaver binaries stay ignored by tools/*).
+!tools/resaver-shim/
+tools/resaver-shim/*
+!tools/resaver-shim/src/
+tools/resaver-shim/src/*
+!tools/resaver-shim/src/fo4mcp/
+tools/resaver-shim/src/fo4mcp/*
+!tools/resaver-shim/src/fo4mcp/CleanShim.java
+
+# Playwright MCP session data (page snapshots, console logs)
+.playwright-mcp/
+.gstack/
+.session-steam-write-ok
+
+# --- Pre-public hygiene ---
+# Stray scratch files at repo root (never ship)
+/plan.md
+# Loose quest-fragment Papyrus that landed at root — one is decompiled from a
+# Creation Club ESL (third-party content); the real fixtures live under fixtures/
+/QF_*.psc
+# Nerd Font build (4 TTFs, no OFL license file present) — a dev statusline
+# convenience, not part of the product; shipping it without OFL.txt would
+# violate the font license. Keep it local.
+/cascadia-code-nf/
+# Machine-specific statusline script (the statusLine block is dropped from
+# .claude/settings.json so a fresh clone doesn't point at a missing file)
+.claude/statusline-fo4-mcp.ps1
+# Creation Kit Papyrus build artifacts — the CK compiler stamps the build
+# machine's user/host/path into .pas/.pex output. The .psc sources are tracked
+# and tests recompile from them, so the artifacts don't need to ship.
+fixtures/papyrus-test/ck/*.pas
+fixtures/papyrus-test/caprica/*.pex
+
+# --- Internal agent / session docs: kept LOCAL, not in the public repo ---
+# The session task board, agent working-principles, memory pointer, historical
+# session handoffs, and verbose per-system research outputs are useful for local
+# development but are noise for a public visitor. Public-facing docs live in the
+# README + docs/. (These files stay on disk; they are just untracked.)
+/CLAUDE.md
+/TASKS.md
+/MEMORY.md
+docs/archive/
+research/

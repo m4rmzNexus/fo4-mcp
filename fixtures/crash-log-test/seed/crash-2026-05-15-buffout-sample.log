@@ -1,0 +1,56 @@
+Fallout 4 v1.10.984
+Buffout 4 v1.31.1 Feb 21 2024 23:33:01
+
+Unhandled exception "EXCEPTION_ACCESS_VIOLATION" at 0x7FF6A2D5FE96 Fallout4.exe+2D5FE96
+
+SETTINGS:
+	[Compatibility]
+	[Fixes]
+	ActorIsHostileToActor: true
+	[Patches]
+	Achievements: true
+	BSMTAManager: true
+	HavokMemorySystem: true
+	INISettingCollection: true
+	MaxStdIO: -1
+	MemoryManager: true
+	MemoryManagerDebug: false
+
+SYSTEM SPECS:
+	OS: Microsoft Windows 11 Pro v10.0.26200
+	CPU: AuthenticAMD AMD Ryzen 7 5800X3D 8-Core Processor
+	GPU #1: Nvidia AD104 [GeForce RTX 4070]
+	PHYSICAL MEMORY: 18.42 GB/31.93 GB
+
+PROBABLE CALL STACK:
+	[0] 0x7FF6A2D5FE96 Fallout4.exe+2D5FE96
+	[1] 0x7FF6A2D60A1B Fallout4.exe+2D60A1B
+	[2] 0x7FFE12345678 BetterConsole.dll+0001678
+	[3] 0x7FF6A0E11C20 Fallout4.exe+0E11C20
+
+REGISTERS:
+	RAX 0x0000000000000000
+	RCX 0x000001F4A2B3C4D5
+
+STACK:
+	[RSP+0  ] 0x000001F4A2B3C4D5
+
+MODULES:
+	Fallout4.exe                        0x7FF6A0000000
+	BetterConsole.dll                   0x7FFE12340000
+
+XSE PLUGINS:
+	f4se_1_10_984.dll v0.7.2
+	Buffout4.dll v1.31.1
+	BetterConsole.dll v1.7.0
+
+PLUGINS:
+	[00]     Fallout4.esm
+	[01]     DLCRobot.esm
+	[02]     DLCworkshop01.esm
+	[03]     DLCCoast.esm
+	[04]     DLCNukaWorld.esm
+	[FE:000] ccBGSFO4001-PipBoy(Black).esl
+	[FE:001] SimSettlements2.esm
+	[05]     ArmorKeywords.esm
+	[06]     MyTestArmor.esp

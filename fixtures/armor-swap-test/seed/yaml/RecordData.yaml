@@ -1,0 +1,8 @@
+SpriggitSource:
+  PackageName: Spriggit.Yaml.Fallout4
+  Version: 0.40.1
+ModKey: test_armor.esp
+GameRelease: Fallout4
+ModHeader:
+  Author: fo4-mcp-fixture
+  Description: Minimal synthetic plugin for Spriggit roundtrip tests (one GlobalInt, no copyrighted content)

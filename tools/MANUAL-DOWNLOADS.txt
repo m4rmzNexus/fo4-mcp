@@ -1,0 +1,293 @@
+================================================================================
+MANUAL DOWNLOADS — kullanıcı (m4rmz) tarafından elle indirilecek
+================================================================================
+
+Last updated: 2026-05-14 (Session 3 — Nexus Premium API toplu + MO2 portable + Creation Kit Steam install)
+
+================================================================================
+STATUS — 2026-05-13 SONRASI
+================================================================================
+
+✅ AUTO-DOWNLOADED via Nexus Premium API (AE-uyumlu variant'lar):
+   #1  F4SE 0.7.7                          tools/f4se/
+   #2  Addictol 1.2 (Buffout 4 NG/AE)      tools/addictol/
+   #3  RobCo Patcher 4.4.5-AE              tools/robco-patcher/
+   #4  SPID-F4 3.1.1-AE                    tools/spid-f4/
+   #5  BOS-F4 2.2.1-AE                     tools/bos-f4/
+   #8  Address Library 1.11.191 (AIO)      tools/address-library/
+   #9  xSE PluginPreloader F4 0.3          tools/xse-preloader/
+   #10 PRP 81.8 (1.11.191 Full)            tools/prp/
+   #12 BodySlide 5.7.1                     tools/bodyslide/
+   #13 Material Editor 1.9.0               tools/material-editor/
+   #14 Cathedral Assets Optimizer 5.3.7    tools/cao/
+   #15 Lighthouse Papyrus Extender 1.13.0  tools/lighthouse-papyrus/  (PapyrusUtil F4 yok — LPE primary)
+   #16 HUDFramework 1.0f                   tools/hudframework/
+   #17 MCM 1.43                            tools/mcm/
+   #18 MO2 2.5.2 (installer + portable)    tools/mo2/
+
+✅ STEAM-INSTALLED (Steam client, 2026-05-14):
+   #6 Creation Kit 1.11.137.0   "Fallout 4 1946160"/  (Steam app 1946160, ~202 MB)
+   #7 Papyrus Compiler 2.8.0.4  "Fallout 4 1946160"/Papyrus Compiler/  (CK ile geldi)
+
+✅ ZATEN HALLEDİLDİ (Session 2 xEdit bundle'ında):
+   #11 BSArch — tools/xedit/BSArch64.exe
+
+⚠ HÂLÂ MANUEL GEREKLİ:
+   (yok — tüm modlama tool'ları indirilmiş durumda)
+
+NOTLAR:
+- Tüm SHA256'lar tools/MANIFEST.md içinde kayıtlı
+- Tüm binary_path'ler resolved (PRP/Address Library/HUDFramework = data mod, exe yok)
+- Detaylı per-mod indirme logu: tools/_fetch-nexus-log.json
+
+================================================================================
+AŞAĞIDAKİ ESKİ TALİMATLAR SADECE REFERANS (hepsi auto-download veya Steam-install ile halloldu)
+================================================================================
+
+================================================================================
+1) F4SE — Fallout 4 Script Extender                          [ZORUNLU, ÖNCELİK]
+================================================================================
+Neden:    Tüm modern FO4 mod ekosisteminin temeli. CommonLibF4 plugin'lerinin
+          (Buffout, RobCo, SPID-F4, BOS-F4, vs) çalışması için F4SE şart.
+          MCP server da F4SE varlığını + versiyonunu enumerate eder.
+Kaynak:   https://www.silverlock.org/   (resmi)
+          GitHub mirror: https://github.com/ianpatt/f4se   (source code)
+Versiyon: Runtime'a göre seç:
+          - OG runtime 1.10.163  -> F4SE 0.6.23 serisi
+          - NG runtime 1.10.984  -> F4SE 0.7.x  serisi
+          Şu an FO4 hangi versiyon? Steam'de kontrol et:
+          Steam Library > Fallout 4 > Properties > Betas
+İçerik:   f4se_loader.exe, f4se_*.dll, Data/F4SE/ klasörü
+Hedef:    f4se_*.dll, f4se_loader.exe, *.exe -> Steam game folder kökü
+          (NOT tools/f4se/ — F4SE oyun klasörünün içine kurulur!)
+          Data/F4SE/Plugins/ klasörü -> Steam Data\F4SE\Plugins\ (boş başlar)
+Not:      F4SE oyun klasörüne kurulduğu için tools/ altına kopyalanmaz.
+          Sadece info'yu MANIFEST.md'ye ekle: kurulu versiyon + tarihte.
+
+================================================================================
+2) Buffout 4 (veya yerine Addictol — TERCIH EDILEN)          [ZORUNLU, ÖNCELİK]
+================================================================================
+Neden:    Crash log üretimi. Modlar test edildiğinde çökmeler kaçınılmaz —
+          crash log olmadan teşhis imkânsız. fo4_analyze_crash_log tool'u
+          bu log'ları parse eder.
+Tercih:   Addictol + AddictolCrashLogger (2026 standardı, multi-runtime, aktif)
+          MiniBuff: DEPRECATED (kullanma)
+          Original Buffout 4: NG runtime'a uyumsuz olabilir
+Kaynak:   Addictol (TERCIH):
+            Nexus: https://www.nexusmods.com/fallout4/mods/<id>   (ID'yi Nexus'ta ara)
+            GitHub (varsa): https://github.com/Maxstele/Addictol  (DOĞRULA)
+          Buffout 4 (eski):
+            Nexus: https://www.nexusmods.com/fallout4/mods/47359
+Hedef:    Data/F4SE/Plugins/Addictol.dll  (Steam game folder)
+          Crash log'lar: %USERPROFILE%/Documents/My Games/Fallout4/F4SE/crash-*.log
+Not:      Önce Addictol'u Nexus'ta doğrula. Yoksa Buffout 4 NG.
+
+================================================================================
+3) RobCo Patcher                                                       [V2 tool]
+================================================================================
+Neden:    Declarative INI tabanlı runtime patcher. fo4_generate_robco_config
+          (V2 tool) bu sistemin INI'larını üretecek.
+Kaynak:   Nexus only: https://www.nexusmods.com/fallout4/mods/68369
+Versiyon: v4.3.5 (2026-01 itibariyle latest — kontrol et)
+Hedef:    tools/robco/ + Data/F4SE/Plugins/RobCoPatcher.dll
+Not:      LICENSE dosyası repo'da yok. Nexus permissions sayfasını oku
+          (özellikle "Use in other mods" bölümü) — Karar 7 (license strategy)
+          için bu bilgi gerekli.
+
+================================================================================
+4) SPID-F4 (Spell Perk Item Distributor for FO4)                       [V2 tool]
+================================================================================
+Neden:    Form distribution patcher (item/spell/perk yerleştirme). RobCo'ya
+          alternatif/tamamlayıcı. fo4_generate_spid_config (V2) bunu üretecek.
+Kaynak:   Nexus: https://www.nexusmods.com/fallout4/mods/<id>  (Nexus'ta ara: "SPID")
+          GitHub source: https://github.com/powerof3/SPID-F4
+          DİKKAT: reference-systems.md eski versiyonunda yanlış olarak Skyrim
+          repo'su (powerof3/Spell-Perk-Item-Distributor) listelenmişti. DOĞRUSU
+          yukarıdaki SPID-F4 repo'su.
+Hedef:    tools/spid-f4/ + Data/F4SE/Plugins/po3_SpellPerkItemDistributor.dll
+Not:      LICENSE dosyası yok, README boş — Nexus permissions kontrol şart.
+
+================================================================================
+5) BaseObjectSwapperF4 (BOS-F4)                                        [V2 tool]
+================================================================================
+Neden:    Dünya nesnesi swap (mesh/material/keyword). fo4_generate_bos_config
+          (V2) bunu üretecek.
+Kaynak:   Nexus: https://www.nexusmods.com/fallout4/mods/<id>  (Nexus'ta ara: "Base Object Swapper Fallout 4")
+          GitHub source: https://github.com/powerof3/BaseObjectSwapperF4
+          DİKKAT: reference-systems.md eski versiyonunda yanlış olarak Skyrim
+          repo'su listelenmişti. DOĞRUSU yukarıdaki BaseObjectSwapperF4 repo'su.
+Hedef:    tools/bos-f4/ + Data/F4SE/Plugins/po3_BaseObjectSwapper.dll
+Not:      LICENSE dosyası yok. Precombined cell etkisi araştırma açık sorusu —
+          fixture testinde doğrulanacak.
+
+================================================================================
+6) Creation Kit (Bethesda official)                          [QUEST AUTHORING]
+================================================================================
+Neden:    Quest authoring (DIAL/INFO/QUST/PACK/SCEN) için "ground truth" editor.
+          Mutagen + Spriggit ile YAML üretmek mümkün ama görsel quest stage
+          flowchart'ı için CK GUI hâlâ en pratik. Karar 2 (mod author persona)
+          gereği quest end-to-end yapılacak.
+Kaynak:   Bethesda.net launcher üzerinden -> Fallout 4 Creation Kit
+          (Steam üzerinden direkt kurulamaz; launcher'a Bethesda hesabı ile
+          giriş gerekli)
+          Launcher: https://bethesda.net/en/game/bethesda-launcher
+Hedef:    Steam game folder'a kurulur (CreationKit.exe + Data/Source/Scripts/)
+Not:      CK Papyrus source'larını da getirir (Data/Source/Scripts/Base/) —
+          Caprica/Champollion için kritik referans.
+          Otomatik GUI scripting Phase 0 P2 risk listesinde — şu an yok.
+
+================================================================================
+7) Bethesda Papyrus Compiler (PapyrusCompiler.exe)            [CK ile gelir]
+================================================================================
+Neden:    Caprica vs Bethesda compiler output karşılaştırma için referans
+          (open question: output identical mi?). CK kurulduğunda gelir.
+Kaynak:   Creation Kit kurulumuyla beraber gelir. Manuel indirme yok.
+Hedef:    <Steam>/Fallout 4/Papyrus Compiler/PapyrusCompiler.exe
+Not:      CK kurulumu sonrası path'i MANIFEST.md'ye not olarak eklenir.
+
+================================================================================
+8) Address Library for F4SE Plugins                       [F4SE PLUGIN ZORUNLU]
+================================================================================
+Neden:    Neredeyse tüm modern F4SE plugin'leri (Buffout/Addictol, RobCo,
+          SPID-F4, BOS-F4, vs) buna bağlı. F4SE'nin hemen ardından kurulur.
+Kaynak:   https://www.nexusmods.com/fallout4/mods/47327
+Versiyon: Runtime'a göre seç (OG 1.10.163 veya NG 1.10.984 için ayrı dosyalar)
+Hedef:    Data/F4SE/Plugins/version-1-10-163-0.bin (veya NG karşılığı)
+          + Data/F4SE/Plugins/version.txt
+Not:      F4SE'siz çalışmaz, F4SE'den ÖNCE kurulamaz. Sıra: F4SE -> Address
+          Library -> Buffout/Addictol -> diğer plugin'ler.
+
+================================================================================
+9) xSE PluginPreloader F4                                 [F4SE PLUGIN ZORUNLU]
+================================================================================
+Neden:    Bazı F4SE plugin'lerinin (özellikle Buffout/Addictol) erken yükleme
+          gerektirir. Bunsuz ekran siyah kalabilir, crash olabilir.
+Kaynak:   https://www.nexusmods.com/fallout4/mods/55780  (Nexus'ta ara)
+Hedef:    Game folder kökü: IpHlpAPI.dll  (DLL hijack pattern)
+          + xSE PluginPreloader.xml config
+Not:      DLL hijack tekniği kullandığı için anti-virüs alarm verebilir.
+
+================================================================================
+10) PRP - Previs Repair Pack                                [BOS FIXTURE TESTI]
+================================================================================
+Neden:    BOS-F4 ve diğer mesh swap mod'ları precombined/previs cell'leri
+          bozar -> performans düşer + visibility issue. PRP fix sağlar.
+          Plan C araştırmasında BOS precombined etkisi açık soru -
+          fixture testinde PRP varlığı kritik.
+Kaynak:   https://www.nexusmods.com/fallout4/mods/46527
+Hedef:    Mod olarak yüklenir (ESM + meshes + previs files)
+Not:      ESM master, base game'in precombined'larını override eder.
+
+================================================================================
+11) BSArch — BA2 pack/unpack CLI                                  [HALLEDILDI]
+================================================================================
+Durum:    *** EK INDIRME GEREKMIYOR — xEdit kurulumuyla geldi ***
+          tools/xedit/BSArch.exe       (32-bit, 2.1 MB)
+          tools/xedit/BSArch64.exe     (64-bit, 4.7 MB)  <- TERCIH
+          tools/xedit/BSArchPro64.exe  (Pro versiyonu, 27 MB)
+Neden:    fo4-mcp V2'de fo4_pack_ba2 tool'u BSArch64.exe'yi subprocess
+          olarak çağıracak. Mod yayınlamada zorunlu.
+Lisans:   xEdit ile aynı (MPL-2.0).
+Not:      Resmi alternatif Bethesda'nın Archive2.exe — Creation Kit ile
+          gelir (Steam game folder/Tools/Archive2/). BSArch daha hızlı ve
+          CLI native, fo4-mcp için tercih edilen.
+
+================================================================================
+12) BodySlide and Outfit Studio                         [ARMOR AUTHORING ZORUNLU]
+================================================================================
+Neden:    Armor mesh authoring + body morph + outfit conversion. Kullanıcı
+          end-to-end armor yapacak (Karar 2 = mod author persona).
+Kaynak:   https://www.nexusmods.com/fallout4/mods/25
+          GitHub repo (ousnius) source-only (release'de binary yok).
+Hedef:    tools/bodyslide/  (standalone install)
+Not:      GUI primary. Outfit Studio ile Blender'dan import'lanmış mesh'leri
+          slot'a göre uydurma yapılır. Custom armor V2 hedefi (Karar 3).
+
+================================================================================
+13) Material Editor (BGSM/BGEM)                         [ARMOR AUTHORING]
+================================================================================
+Neden:    .bgsm (material) ve .bgem (effect) dosya editörü. Custom armor
+          yapımında shader/texture path/parametre tweak için.
+Kaynak:   https://www.nexusmods.com/fallout4/mods/3635
+Hedef:    tools/material-editor/Material Editor.exe
+Not:      GUI tool. Armor authoring için kritik ama V2'ye sarkıyor.
+
+================================================================================
+14) Cathedral Assets Optimizer                          [ASSET OPTIMIZATION]
+================================================================================
+Neden:    Texture compression + mesh optimization batch tool. NIF'leri
+          modern form'a getirir, DDS texture'ları sıkıştırır, BSA/BA2
+          oluşturur. Mod release pipeline'ında zorunlu.
+Kaynak:   GitHub repo (Guekka/Cathedral-Assets-Optimizer) GitHub API'sinden
+          erişilemez (404). Alternatifler:
+          - Nexus: https://www.nexusmods.com/skyrimspecialedition/mods/23316
+            (FO4 desteği var, ana sayfa SSE ama config'le FO4)
+Hedef:    tools/cao/Cathedral Assets Optimizer.exe
+Not:      Phase 1 araştırmada kapsam dışıydı, V2 asset pipeline'da eklenir.
+
+================================================================================
+15) PapyrusUtil F4 (SUP F4SE)                          [PAPYRUS RUNTIME EXT]
+================================================================================
+Neden:    Vanilla Papyrus'un eksik fonksiyonlarını ekler (string format,
+          math, array manipulation, file I/O). Quest scripting'de yaygın
+          dependency.
+Kaynak:   https://www.nexusmods.com/fallout4/mods/41076  (Nexus'ta ara: "PapyrusUtil F4")
+Hedef:    Data/F4SE/Plugins/PapyrusUtil.dll  +  Data/Scripts/*.pex
+Not:      fo4-mcp doğrudan çağırmaz, ama fo4_papyrus_build çıktıları
+          PapyrusUtil API'sini referans edebilir.
+
+================================================================================
+16) HUDFramework                                                 [HUD UI API]
+================================================================================
+Neden:    Custom HUD widget yazma API'si (SWF + Papyrus). Quest sırasında
+          custom HUD element gerekirse bunsuz olmaz.
+Kaynak:   https://www.nexusmods.com/fallout4/mods/20309
+Hedef:    Data/F4SE/Plugins/HUDFramework.dll  +  Data/Interface/HUDFramework/
+Not:      MVP quest scope'unda olmayabilir; advanced quest tasarımı için.
+
+================================================================================
+17) MCM (Mod Configuration Menu)                              [IN-GAME CONFIG]
+================================================================================
+Neden:    Mod'lar için in-game ayar sayfası. Kullanıcının mod'u publish
+          edeceği zaman MCM ile config sunması beklenir.
+Kaynak:   https://www.nexusmods.com/fallout4/mods/21497
+Hedef:    Data/MCM/  +  Data/Interface/MCM/
+Not:      Quest mod'ların standart kullanıcı arayüzü.
+
+================================================================================
+18) Mod Organizer 2 (MO2)                                [MOD MANAGEMENT GUI]
+================================================================================
+Durum:    GitHub release sadece "-pdbs.7z" (debug symbols) içerir, gerçek
+          installer yok -> otomatik fetch'ten cikarildi.
+Neden:    Karar 2 (mod author + MO2 user persona) gereği. fo4-mcp MO2'yi
+          spawn etmez ama active profile + mods/ + profiles/ dizinlerini
+          READ-ONLY okur. MO2 kurulu degilse vanilla %LOCALAPPDATA%/
+          Fallout4/plugins.txt fallback'e duser.
+Kaynak:   - GitHub installer: https://github.com/ModOrganizer2/modorganizer/releases/latest
+            (NOT: aramada `Mod.Organizer-2.x.x.7z` veya `.exe` arayin,
+            `pdbs` olmayani)
+          - Nexus: https://www.nexusmods.com/skyrimspecialedition/mods/6194
+            (sayfa SSE ama indirme tum oyunlar icin gecerli)
+Versiyon: v2.5.2 (2024-08, kontrol et)
+Hedef:    Sistem-wide kurulum tercihen (ornegin
+          C:/Program Files/Mod Organizer 2/ veya kullanici dizini).
+          Portable instance: kullanici secimine gore.
+Not:      MO2 kurulduktan sonra fo4-mcp .env dosyasinda MO2_INSTANCE_DIR
+          ayarini yap (ornek: %LOCALAPPDATA%/ModOrganizer/
+          Fallout4 portable mode icin).
+
+================================================================================
+EK NOT — Nexus oturumu hakkında
+================================================================================
+Nexus rate limit ve Premium hesap CDN tercihleri Claude tarafında oturum
+oluşturmaya elverişli değil. Premium üye değilseniz, ücretsiz indirmede
+manuel "Slow Download" tıklaması gerekir. Bu nedenle 3-5 numaralı
+girdiler tamamen manuel.
+
+İndirdikten sonra her tool için:
+1) ZIP'i `tools/<name>/` altına çıkar (veya F4SE/Buffout/RobCo/SPID-F4/BOS-F4
+   için Steam Data/F4SE/Plugins/ altına)
+2) `tools/MANIFEST.md` -> ilgili giriş -> TBD alanları doldur:
+   version, asset, binary_path, downloaded, sha256
+3) (Opsiyonel) sha256 hesapla:
+   PowerShell> Get-FileHash <dosya> -Algorithm SHA256

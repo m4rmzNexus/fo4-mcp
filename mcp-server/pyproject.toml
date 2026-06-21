@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fo4-mcp"
+version = "0.1.0-dev"
+description = "MCP server exposing Fallout 4 modding tools (Mutagen/Spriggit/Synthesis/Papyrus/CLASSIC) to AI agents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "m4rmz" }]
+
+dependencies = [
+    "mcp>=1.0.0",
+    "pydantic>=2.5",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+fo4-mcp = "fo4_mcp.server:main"
+
+[tool.setuptools.packages.find]
+include = ["fo4_mcp*"]
+exclude = ["tests*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
