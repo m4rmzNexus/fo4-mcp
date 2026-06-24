@@ -34,6 +34,18 @@ how CI runs them. Compiled artifacts under `fixtures/` (`.pex`, `.pas`) are
 **regenerated** by the tests from their `.psc` sources; don't commit build
 output.
 
+When you have the mutagen-cli writer built locally, run the writer-enforcing
+variant before committing changes to the authoring path:
+
+```bash
+FO4MCP_REQUIRE_WRITER=1 pytest -q
+```
+
+`FO4MCP_REQUIRE_WRITER` (truthy: `1`/`true`/`yes`, case-insensitive) flips the
+writer-gated round-trip tests from *skip* to *fail* when the binary is missing,
+so a silently-absent writer can't hide a `Program.cs` serialization regression.
+Leave it unset for the pure-Python lane (the default, and how CI runs).
+
 ## Hard rules
 
 These are enforced by CI and a local PreToolUse hook — please don't work around

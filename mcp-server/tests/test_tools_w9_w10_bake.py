@@ -14,14 +14,17 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fo4_mcp.config import Config, load_config
 from fo4_mcp.errors import Fo4McpError
 from fo4_mcp.facegen import fo4_build_facegen
 from fo4_mcp.manifest import parse_manifest
 from fo4_mcp.seq import fo4_build_seq
-from fo4_mcp.tools import _mutagen_cli_binary, fo4_create_record
+from fo4_mcp.tools import fo4_create_record
 from fo4_mcp.voice_bake import _fuze_pack, _duration_for, fo4_bake_voice_assets
+
+from conftest import require_or_skip_writer
 
 _REPO = Path(__file__).resolve().parents[2]
 _MANIFEST = parse_manifest(_REPO / "tools" / "MANIFEST.md")
@@ -146,8 +149,7 @@ def _voice_spec():
 def test_voice_bake_rejects_out_of_repo(real_env, staging_out, tmp_path):
     """out_root outside the repo is refused by the safe-write boundary."""
     cfg, manifest = real_env
-    if _mutagen_cli_binary(cfg, manifest) is None:
-        pytest.skip("mutagen-cli not built")
+    require_or_skip_writer(cfg, manifest)
     out = staging_out / "VoiceBake.esp"
     fo4_create_record(cfg, manifest, _voice_spec(), str(out))
     with pytest.raises(Fo4McpError):
@@ -157,8 +159,7 @@ def test_voice_bake_rejects_out_of_repo(real_env, staging_out, tmp_path):
 
 def test_voice_bake_dry_run_plans_lines(real_env, staging_out):
     cfg, manifest = real_env
-    if _mutagen_cli_binary(cfg, manifest) is None:
-        pytest.skip("mutagen-cli not built")
+    require_or_skip_writer(cfg, manifest)
     out = staging_out / "VoiceBake.esp"
     fo4_create_record(cfg, manifest, _voice_spec(), str(out))
     data = fo4_bake_voice_assets(cfg, manifest, str(out),
@@ -174,8 +175,7 @@ def test_voice_bake_dry_run_plans_lines(real_env, staging_out):
 def test_voice_bake_e2e_makes_valid_fuz(real_env, staging_out):
     """Real bake: LipGenerator + xWMAEncode + FUZE pack -> a valid .fuz per line on disk."""
     cfg, manifest = real_env
-    if _mutagen_cli_binary(cfg, manifest) is None:
-        pytest.skip("mutagen-cli not built")
+    require_or_skip_writer(cfg, manifest)
     if not _toolchain_present(cfg):
         pytest.skip("LipGen/xWMAEncode toolchain not present")
     if cfg.fo4_install_dir is None or not (cfg.fo4_install_dir / "Data" / "Fallout4.esm").is_file():

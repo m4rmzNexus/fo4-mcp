@@ -13,16 +13,18 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fo4_mcp.config import Config, load_config
 from fo4_mcp.errors import Fo4McpError
 from fo4_mcp.manifest import parse_manifest
 from fo4_mcp.tools import (
     _extract_record_fields,
-    _mutagen_cli_binary,
     _norm_formid,
     fo4_inspect_record,
 )
+
+from conftest import require_or_skip_mutagen_cli
 
 _REPO = Path(__file__).resolve().parents[2]
 _SPRIGGIT = _REPO / "tools" / "spriggit" / "Spriggit.CLI.exe"
@@ -117,8 +119,7 @@ def test_inspect_missing_plugin_raises(real_env, tmp_path):
 
 def _skip_if_no_mutagen_cli(real_env):
     cfg, manifest = real_env
-    if _mutagen_cli_binary(cfg, manifest) is None:
-        pytest.skip("mutagen-cli not built")
+    require_or_skip_mutagen_cli(cfg, manifest)
     if not _FIXTURE_ESP.exists():
         pytest.skip("fixture esp missing")
 
