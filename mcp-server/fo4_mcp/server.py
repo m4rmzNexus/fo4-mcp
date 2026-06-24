@@ -17,6 +17,7 @@ from typing import Any
 
 from . import (
     ba2_pack,
+    bgsm_ops,
     compact_formids,
     esl_flag,
     facegen,
@@ -518,6 +519,29 @@ def build_server(cfg: Config | None = None, manifest: Manifest | None = None):
         the mod folder) to also confirm the diffuse .dds exists. Returns ok({ok, issues, info}); ok=False
         means do not ship. Catches the three stacked PyNifly/flat-MISC render bugs."""
         return _safe(lambda: nif_ops.fo4_validate_nif(cfg, nif, donor_nif, textures_root=textures_root))
+
+    # Tool N3 — BGSM material authoring (clean-room codec, Blender-pipeline Faz B1)
+    @mcp.tool()
+    def fo4_create_bgsm(
+        output: str, fields: dict[str, Any] | None = None,
+        template: str | None = None, version: int = 2,
+    ) -> dict[str, Any]:
+        """Author a Bethesda .bgsm material with arbitrary fields (no Material-Editor GUI). With
+        `template` it decodes that .bgsm and applies only `fields`, preserving every other byte
+        exactly (safe edit, e.g. swap DiffuseTexture + clear AlphaTest on a vanilla material);
+        without one it builds from Material-Editor defaults at `version` (FO4 = 2). `fields` keys are
+        BGSM property names: DiffuseTexture/NormalTexture/SmoothSpecTexture/..., AlphaTest, TwoSided,
+        Decal, EmitEnabled, EmittanceColor ([r,g,b] or 0xRRGGBB), SpecularColor, Smoothness,
+        AlphaBlendMode ("None"/"Standard"/"Additive"/"Multiplicative"). Output gated to staging/
+        fixtures (Steam Data refused); .bak on overwrite. Round-trip proven byte-exact vs vanilla."""
+        return _safe(lambda: bgsm_ops.fo4_create_bgsm(cfg, output, fields, template, version))
+
+    # Tool N4 — BGSM read-only inspector
+    @mcp.tool()
+    def fo4_inspect_bgsm(bgsm: str) -> dict[str, Any]:
+        """Read-only: decode a .bgsm into its full field set (textures, flags, colors, version) and
+        report whether the codec round-trips it byte-identical (fidelity self-check)."""
+        return _safe(lambda: bgsm_ops.fo4_inspect_bgsm(cfg, bgsm))
 
     return mcp
 

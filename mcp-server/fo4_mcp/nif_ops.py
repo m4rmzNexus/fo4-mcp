@@ -123,6 +123,37 @@ def texture_set(meta: dict) -> list[str]:
     return out
 
 
+def dds_format(path: str | Path) -> tuple[str | None, int | None]:
+    """(fourCC, dxgiFormat) of a DDS. dxgiFormat is set only for DX10-header DDS (else None).
+    Returns (None, None) if not a DDS. FO4 BC7 diffuse should be DXGI 99 (BC7_UNORM_SRGB); 98 is linear."""
+    b = Path(path).read_bytes()[:148]
+    if b[:4] != b"DDS ":
+        return (None, None)
+    fourcc = b[0x54:0x58]
+    if fourcc == b"DX10" and len(b) >= 132:
+        return ("DX10", struct.unpack_from("<I", b, 128)[0])
+    return (fourcc.decode("latin1", "replace").rstrip("\x00"), None)
+
+
+# linear BC color formats -> their _SRGB sibling (a diffuse/color map in the linear one renders washed-out)
+_DIFFUSE_LINEAR_TO_SRGB = {98: 99, 71: 72, 77: 78}   # BC7 / BC1 / BC3
+
+
+def set_dds_diffuse_srgb(path: str | Path) -> bool:
+    """Flip a diffuse DDS's DX10 dxgiFormat from a linear BC variant to its _SRGB sibling (98->99, ...).
+    LOSSLESS — only the 4-byte format tag changes; the compressed pixels (already sRGB-encoded) are
+    untouched, so the GPU now gamma-decodes them correctly. Returns True if it changed the file."""
+    b = bytearray(Path(path).read_bytes())
+    if b[:4] != b"DDS " or b[0x54:0x58] != b"DX10" or len(b) < 132:
+        return False
+    dxgi = struct.unpack_from("<I", b, 128)[0]
+    if dxgi not in _DIFFUSE_LINEAR_TO_SRGB:
+        return False
+    struct.pack_into("<I", b, 128, _DIFFUSE_LINEAR_TO_SRGB[dxgi])
+    Path(path).write_bytes(b)
+    return True
+
+
 # ---------------------------------------------------------------- transforms (fixes)
 def splice_collision_bytes(donor: dict, target: dict) -> bytearray:
     if donor["types"] != target["types"]:
@@ -136,6 +167,34 @@ def splice_collision_bytes(donor: dict, target: dict) -> bytearray:
             raise Fo4McpError(ErrorCode.INVALID_ARGUMENT, f"{t} block index mismatch donor={di} target={ti}", {})
         new_blocks[ti] = donor["blocks"][di]
         new_sizes[ti] = donor["sizes"][di]
+    out = bytearray(target["buf"][:target["blocks_start"]])
+    struct.pack_into(f"<{target['nblocks']}I", out, target["sizes_off"], *new_sizes)
+    for blk in new_blocks:
+        out += blk
+    out += target["tail"]
+    return out
+
+
+def transplant_physics_system(donor: dict, target: dict) -> bytearray:
+    """Give `target` a correctly-SIZED collision by transplanting `donor`'s bhkPhysicsSystem block —
+    WITHOUT requiring matching block layouts (unlike splice_collision_bytes, which only repairs PyNifly's
+    same-layout havok corruption). Use when the PyNifly pipeline's donor collision is the wrong shape for
+    the piece (e.g. the flat-MISC money donor's coin-sized hull on a 168x200 wall) and a vanilla
+    same-class piece has the right one. Pick a donor whose snap-edge width matches (workshop walls = +-84).
+
+    target keeps its OWN bhkNPCollisionObject: that block's Body ref already points at target's
+    bhkPhysicsSystem index, which we leave in place and only swap the bytes of. bhkPhysicsSystem is a
+    self-contained Havok packfile (no outgoing nif-block/string refs and a static body), so a verbatim
+    byte swap + size-table fixup is sufficient and safe. Reusable across the furniture-snappable pipeline.
+    """
+    dp, tp = _one(donor, "bhkPhysicsSystem"), _one(target, "bhkPhysicsSystem")
+    if dp is None or tp is None:
+        raise Fo4McpError(ErrorCode.INVALID_ARGUMENT,
+                          f"bhkPhysicsSystem missing (donor={dp} target={tp})", {})
+    if _one(target, "bhkNPCollisionObject") is None:
+        raise Fo4McpError(ErrorCode.INVALID_ARGUMENT, "target has no bhkNPCollisionObject to drive the body", {})
+    new_sizes = list(target["sizes"]); new_sizes[tp] = donor["sizes"][dp]
+    new_blocks = list(target["blocks"]); new_blocks[tp] = donor["blocks"][dp]
     out = bytearray(target["buf"][:target["blocks_start"]])
     struct.pack_into(f"<{target['nblocks']}I", out, target["sizes_off"], *new_sizes)
     for blk in new_blocks:
@@ -171,6 +230,7 @@ def validate_meta(meta: dict, donor_meta: dict | None = None,
                   textures_root: str | Path | None = None) -> dict[str, Any]:
     """validate() core over already-parsed metas (so unit tests can drive it with crafted blocks)."""
     issues: list[str] = []
+    warnings: list[str] = []
     info: dict[str, Any] = {}
 
     for t in _REQUIRED:
@@ -212,6 +272,13 @@ def validate_meta(meta: dict, donor_meta: dict | None = None,
         dds = Path(textures_root) / tex[0].replace("\\", "/")
         if not dds.is_file():
             issues.append(f"diffuse texture not found: {tex[0]}")
+        else:
+            cc, dxgi = dds_format(dds)
+            info["diffuseDxgi"] = dxgi if cc == "DX10" else cc
+            if cc == "DX10" and dxgi in _DIFFUSE_LINEAR_TO_SRGB:
+                warnings.append(
+                    f"diffuse '{tex[0]}' is linear (DXGI {dxgi}); a color map should be sRGB "
+                    f"(DXGI {_DIFFUSE_LINEAR_TO_SRGB[dxgi]}) or it renders washed-out — re-encode with texconv")
 
     # 5) thickness — zero-Z double surface z-fights/culls in preview (best-effort)
     z = mesh_z_extent(meta)
@@ -222,7 +289,7 @@ def validate_meta(meta: dict, donor_meta: dict | None = None,
     else:
         info["meshZExtent"] = "unparsed"
 
-    return {"ok": not issues, "issues": issues, "info": info}
+    return {"ok": not issues, "issues": issues, "warnings": warnings, "info": info}
 
 
 # ---------------------------------------------------------------- MCP entry points

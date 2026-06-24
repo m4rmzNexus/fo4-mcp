@@ -106,3 +106,50 @@ def test_validate_flags_missing_normals():
     r = N.validate_meta(_good_meta(nt=False), _DONOR)
     assert not r["ok"]
     assert any("NORMAL" in i or "TANGENT" in i for i in r["issues"])
+
+
+# ---- DDS color-space gate (B3) ----
+def _dds(dxgi: int) -> bytes:
+    b = bytearray(148)
+    b[0:4] = b"DDS "
+    b[0x54:0x58] = b"DX10"                 # ddspf.dwFourCC
+    struct.pack_into("<I", b, 128, dxgi)   # DXT10 header dxgiFormat
+    return bytes(b)
+
+
+def test_dds_format_reads_dxgi(tmp_path):
+    f = tmp_path / "x.dds"
+    f.write_bytes(_dds(99))
+    assert N.dds_format(f) == ("DX10", 99)
+    f.write_bytes(b"notadds" + bytes(200))
+    assert N.dds_format(f) == (None, None)
+
+
+def test_validate_warns_linear_diffuse(tmp_path):
+    d = tmp_path / "textures" / "PrewarCoupons"
+    d.mkdir(parents=True)
+    (d / "coupon_cram.dds").write_bytes(_dds(98))        # BC7 linear — wrong for a color map
+    r = N.validate_meta(_good_meta(), _DONOR, textures_root=tmp_path)
+    assert r["ok"], r["issues"]                          # warning, NOT blocking
+    assert any("linear" in w.lower() or "srgb" in w.lower() for w in r["warnings"])
+    assert r["info"]["diffuseDxgi"] == 98
+
+
+def test_validate_no_warn_srgb_diffuse(tmp_path):
+    d = tmp_path / "textures" / "PrewarCoupons"
+    d.mkdir(parents=True)
+    (d / "coupon_cram.dds").write_bytes(_dds(99))        # BC7 sRGB — correct
+    r = N.validate_meta(_good_meta(), _DONOR, textures_root=tmp_path)
+    assert not r["warnings"]
+    assert r["info"]["diffuseDxgi"] == 99
+
+
+def test_set_dds_diffuse_srgb_flips_and_is_idempotent(tmp_path):
+    f = tmp_path / "diffuse.dds"
+    f.write_bytes(_dds(98))                               # linear
+    assert N.set_dds_diffuse_srgb(f) is True              # 98 -> 99
+    assert N.dds_format(f) == ("DX10", 99)
+    assert N.set_dds_diffuse_srgb(f) is False             # already sRGB -> no-op
+    # lossless: only the 4-byte tag changed
+    a = bytearray(_dds(98)); struct.pack_into("<I", a, 128, 99)
+    assert f.read_bytes() == bytes(a)
