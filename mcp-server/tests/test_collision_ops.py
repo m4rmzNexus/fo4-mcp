@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fo4_mcp.collision_ops import (
     compute_hull, decode_polytope, patch_polytope, _planes_match, _find_polytope_header,
+    find_all_polytope_headers, decode_all_polytopes, body_headers, replace_convex_in_nif,
     HKVEC4, HAVOK_TO_GAME, PACK_MAGIC0, PACK_MAGIC1,
 )
 from fo4_mcp.errors import Fo4McpError
@@ -150,6 +151,103 @@ def test_patch_polytope_count_mismatch_raises():
 def test_decode_rejects_non_packfile():
     with pytest.raises(Fo4McpError):
         decode_polytope(struct.pack("<I", 100) + bytes(100))          # no packfile magic
+
+
+# ---- MULTI-BODY: a packfile with two convex bodies (the Foundation_BrickRed01 case) ----
+def _body_bytes(verts, planes) -> bytes:
+    """One hknpConvexPolytopeShape body = [u16 mini-header][vert vec4s][plane vec4s]."""
+    out = bytearray(16)
+    struct.pack_into("<8H", out, 0, len(verts), 0, len(planes), 0, 0, 0, 0, 0)
+    for v in verts:
+        out += struct.pack("<4f", *v)
+    for pl in planes:
+        out += struct.pack("<4f", *pl)
+    return bytes(out)
+
+
+def _synthetic_two_body_block(body_a, body_b, head_pad=48, gap=32, tail=48):
+    """[u32 dataSize][magic][pad][body A][gap of zeros][body B][tail] -> (block, a_off, b_off). The
+    zero gap exercises the scanner's resume-past-end (it must not find a phantom header in the gap)."""
+    pack = bytearray(head_pad)
+    struct.pack_into("<II", pack, 0, PACK_MAGIC0, PACK_MAGIC1)        # packfile magic @0
+    a_off = head_pad
+    pack += _body_bytes(*body_a)
+    pack += bytes(gap)
+    b_off = len(pack)
+    pack += _body_bytes(*body_b)
+    pack += bytes(tail)
+    return struct.pack("<I", len(pack)) + bytes(pack), a_off, b_off
+
+
+def _two_bodies():
+    """Body 0 = cube (8 verts / 6 planes), body 1 = tetra (4 / 4) — distinct counts to tell them apart."""
+    cube = compute_hull(_unit_cube(), in_game_units=False)
+    tetra = compute_hull(_tetra(), in_game_units=False)
+    return cube, tetra
+
+
+def test_find_all_headers_locates_both_bodies():
+    cube, tetra = _two_bodies()
+    blk, a_off, b_off = _synthetic_two_body_block(
+        (cube["hullVerts"], cube["planes"]), (tetra["hullVerts"], tetra["planes"]))
+    assert find_all_polytope_headers(blk[4:]) == [a_off, b_off]       # both, in order, no phantom in gap
+
+
+def test_decode_all_reports_body_count():
+    cube, tetra = _two_bodies()
+    blk, *_ = _synthetic_two_body_block(
+        (cube["hullVerts"], cube["planes"]), (tetra["hullVerts"], tetra["planes"]))
+    allp = decode_all_polytopes(blk)
+    assert allp["bodyCount"] == 2
+    assert allp["bodies"][0]["vertexCount"] == 8 and allp["bodies"][1]["vertexCount"] == 4
+
+
+def test_patch_specific_body_leaves_other_untouched():
+    """Patching body 0 (cube) must not disturb body 1 (tetra) — the multi-body correctness guarantee."""
+    cube, tetra = _two_bodies()
+    blk, *_ = _synthetic_two_body_block(
+        (cube["hullVerts"], cube["planes"]), (tetra["hullVerts"], tetra["planes"]))
+    headers = body_headers(blk)
+    shifted = compute_hull([[c * 3 for c in v] for v in _unit_cube()], in_game_units=False)
+    patched = patch_polytope(blk, shifted["hullVerts"], shifted["planes"], headers[0])
+    assert len(patched) == len(blk)
+    allp = decode_all_polytopes(patched)
+    assert max(abs(v[i]) for v in allp["bodies"][0]["hullVerts"] for i in range(3)) == pytest.approx(3.0, abs=1e-4)
+    assert allp["bodies"][1]["vertexCount"] == 4                      # body 1 untouched
+    assert _planes_match(allp["bodies"][1]["planes"], tetra["planes"])
+
+
+def _two_body_meta():
+    cube, tetra = _two_bodies()
+    phys, *_ = _synthetic_two_body_block(
+        (cube["hullVerts"], cube["planes"]), (tetra["hullVerts"], tetra["planes"]))
+    meta = {"types": ["bhkPhysicsSystem"], "blocks": [phys],
+            "buf": bytearray(b"HEADER"), "blocks_start": 6, "tail": b"TAIL"}
+    return meta, cube
+
+
+def test_replace_in_nif_refuses_multibody_without_index():
+    """A multi-body donor with no body_index must REFUSE — never silently patch only body 0."""
+    meta, cube = _two_body_meta()
+    with pytest.raises(Fo4McpError):
+        replace_convex_in_nif(meta, cube["hullVerts"], cube["planes"])
+
+
+def test_replace_in_nif_patches_chosen_body_and_reassembles():
+    meta, _cube = _two_body_meta()
+    shifted = compute_hull([[c * 2 for c in v] for v in _unit_cube()], in_game_units=False)
+    out = replace_convex_in_nif(meta, shifted["hullVerts"], shifted["planes"], body_index=0)
+    assert out[:6] == b"HEADER" and out[-4:] == b"TAIL"              # header + tail preserved
+    allp = decode_all_polytopes(bytes(out[6:-4]))
+    assert allp["bodyCount"] == 2
+    assert max(abs(v[i]) for v in allp["bodies"][0]["hullVerts"] for i in range(3)) == pytest.approx(2.0, abs=1e-4)
+    assert allp["bodies"][1]["vertexCount"] == 4                     # the other body still intact
+
+
+def test_replace_in_nif_body_index_out_of_range_raises():
+    meta, cube = _two_body_meta()
+    with pytest.raises(Fo4McpError):
+        replace_convex_in_nif(meta, cube["hullVerts"], cube["planes"], body_index=5)
 
 
 # ---- plane-set comparison helper ----

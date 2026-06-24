@@ -18,6 +18,7 @@ from typing import Any
 from . import (
     ba2_pack,
     bgsm_ops,
+    collision_ops,
     compact_formids,
     esl_flag,
     facegen,
@@ -542,6 +543,31 @@ def build_server(cfg: Config | None = None, manifest: Manifest | None = None):
         """Read-only: decode a .bgsm into its full field set (textures, flags, colors, version) and
         report whether the codec round-trips it byte-identical (fidelity self-check)."""
         return _safe(lambda: bgsm_ops.fo4_inspect_bgsm(cfg, bgsm))
+
+    # Tool N5 — convex-collision authoring (scipy hull -> hknpConvexPolytopeShape, Blender pipeline Faz D)
+    @mcp.tool()
+    def fo4_make_convex_collision(
+        donor_nif: str, output_nif: str, verts: list[list[float]],
+        in_game_units: bool = True, radius: float = 0.5, body_index: int | None = None,
+    ) -> dict[str, Any]:
+        """Author FO4 convex collision (hknpConvexPolytopeShape) without Havok tools: compute the convex
+        hull of `verts` (Nx3 mesh vertices; in_game_units=True divides by 69.99 to havok-metric) and, IF
+        its vertex/plane counts match the donor's, write a copy of `donor_nif` to `output_nif` with the
+        hull swapped in (donor packfile/topology otherwise byte-preserved — TIER 1). A donor with >1
+        convex body is refused unless `body_index` (0..N-1) picks which to patch. A different topology
+        (count mismatch) needs the gated Tier-2 full-packfile author. Output gated to staging/fixtures
+        (Steam Data refused); .bak on overwrite. NOT in-game validated (Faz E gate)."""
+        return _safe(lambda: collision_ops.fo4_make_convex_collision(
+            cfg, donor_nif, output_nif, verts, in_game_units, radius, body_index))
+
+    # Tool N6 — convex-collision read-only inspector
+    @mcp.tool()
+    def fo4_inspect_collision(nif: str) -> dict[str, Any]:
+        """Read-only: decode every hknpConvexPolytopeShape body in a nif's bhkPhysicsSystem and report
+        each body's hull vertices (havok-metric + game-unit) and face planes, plus a scipy self-check.
+        bodyCount > 1 means a Tier-1 swap must target one body at a time (make_convex_collision
+        body_index)."""
+        return _safe(lambda: collision_ops.fo4_inspect_collision(cfg, nif))
 
     return mcp
 

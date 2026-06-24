@@ -116,50 +116,68 @@ def _packfile(phys_block: bytes) -> tuple[bytes, int]:
     return pack, 4
 
 
-def _find_polytope_header(pack: bytes) -> int | None:
-    """Locate the hknpConvexPolytopeShape mini-header inside the packfile data section.
+def _verts_plausible(pack: bytes, va: int, vc: int) -> bool:
+    """Every vertex .w is a plausible convex radius/shell (0 < w <= 4) — rejects random byte runs."""
+    for k in range(vc):
+        w = struct.unpack_from("<f", pack, va + k * HKVEC4 + 12)[0]
+        if not (0.0 < w <= 4.0):
+            return False
+    return True
+
+
+def _planes_unit(pack: bytes, pa: int, pc: int) -> bool:
+    """Every plane normal is unit-length — the other half of the self-consistency check."""
+    for k in range(pc):
+        nx, ny, nz, _d = struct.unpack_from("<4f", pack, pa + k * HKVEC4)
+        if abs((nx * nx + ny * ny + nz * nz) - 1.0) > 1e-3:
+            return False
+    return True
+
+
+def find_all_polytope_headers(pack: bytes) -> list[int]:
+    """Locate EVERY hknpConvexPolytopeShape mini-header in the packfile data section.
 
     The mini-header is the 16-byte u16 tuple (vertexCount, _, planeCount, _, faceLinkCount, _, 0, 0)
-    that is IMMEDIATELY followed by `vertexCount` hkVector4 vertices then `planeCount` hkVector4
-    planes. We scan for that self-consistent shape rather than hardcoding offset 1008 (which is
-    donor-specific): a candidate is accepted iff the two trailing u16s are 0, the counts are sane,
-    every following vertex .w is a plausible convex radius (0 < w <= 4), and every plane normal is
-    unit-length. Returns the mini-header's absolute offset in `pack`, or None."""
+    IMMEDIATELY followed by `vertexCount` hkVector4 vertices then `planeCount` hkVector4 planes. We
+    scan for that self-consistent shape rather than hardcoding offset 1008 (donor-specific): a
+    candidate is accepted iff the two trailing u16s are 0, the counts are sane, every following vertex
+    .w is a plausible convex radius (0 < w <= 4), and every plane normal is unit-length. After
+    accepting a body we resume scanning PAST its end, so a multi-body donor (e.g. Foundation_BrickRed01
+    carries two convex bodies @1008/@1488) yields every body, not just the first. Returns the
+    mini-header offsets in packfile order (absolute in `pack`)."""
     n = len(pack)
-    for off in range(0, n - 16, 2):                          # u16-aligned
+    out: list[int] = []
+    off = 0
+    while off <= n - 16:                                     # u16-aligned scan
         vc, _v, pc, _p, _flc, _f, z0, z1 = struct.unpack_from("<8H", pack, off)
         if z0 or z1 or not (4 <= vc <= 256) or not (4 <= pc <= 256):
+            off += 2
             continue
         va = off + 16
         pa = va + vc * HKVEC4
         end = pa + pc * HKVEC4
-        if end > n:
-            continue
-        ok_verts = True
-        for k in range(vc):
-            w = struct.unpack_from("<f", pack, va + k * HKVEC4 + 12)[0]
-            if not (0.0 < w <= 4.0):                         # convex radius / shell
-                ok_verts = False
-                break
-        if not ok_verts:
-            continue
-        ok_planes = True
-        for k in range(pc):
-            nx, ny, nz, _d = struct.unpack_from("<4f", pack, pa + k * HKVEC4)
-            if abs((nx * nx + ny * ny + nz * nz) - 1.0) > 1e-3:
-                ok_planes = False
-                break
-        if ok_planes:
-            return off
-    return None
+        if end <= n and _verts_plausible(pack, va, vc) and _planes_unit(pack, pa, pc):
+            out.append(off)
+            off = end                                        # skip this body's vert/plane data
+        else:
+            off += 2
+    return out
 
 
-def decode_polytope(phys_block: bytes) -> dict[str, Any]:
-    """Decode the hknpConvexPolytopeShape inside a bhkPhysicsSystem nif block ->
+def _find_polytope_header(pack: bytes) -> int | None:
+    """First hknpConvexPolytopeShape mini-header offset, or None (single-body back-compat helper)."""
+    hs = find_all_polytope_headers(pack)
+    return hs[0] if hs else None
+
+
+def decode_polytope(phys_block: bytes, header_off: int | None = None) -> dict[str, Any]:
+    """Decode ONE hknpConvexPolytopeShape inside a bhkPhysicsSystem nif block ->
     {vertexCount, planeCount, hullVerts:[[x,y,z,w]], planes:[[nx,ny,nz,d]], headerOffset, vertOffset,
-    planeOffset} (offsets are absolute in the packfile, i.e. block bytes minus the 4-byte prefix)."""
+    planeOffset} (offsets are absolute in the packfile, i.e. block bytes minus the 4-byte prefix).
+    `header_off` selects which body — default is the first found; pass an offset from
+    find_all_polytope_headers to decode a specific body of a multi-body donor."""
     pack, prefix = _packfile(phys_block)
-    hoff = _find_polytope_header(pack)
+    hoff = header_off if header_off is not None else _find_polytope_header(pack)
     if hoff is None:
         raise Fo4McpError(ErrorCode.INVALID_ARGUMENT,
                           "no hknpConvexPolytopeShape found (concave hknpCompressedMeshShape or a "
@@ -173,14 +191,35 @@ def decode_polytope(phys_block: bytes) -> dict[str, Any]:
             "headerOffset": hoff, "vertOffset": va, "planeOffset": pa, "_prefix": prefix}
 
 
+def body_headers(phys_block: bytes) -> list[int]:
+    """Header offsets of every hknpConvexPolytopeShape body in a bhkPhysicsSystem block (>=0)."""
+    pack, _prefix = _packfile(phys_block)
+    return find_all_polytope_headers(pack)
+
+
+def decode_all_polytopes(phys_block: bytes) -> dict[str, Any]:
+    """Decode EVERY hknpConvexPolytopeShape body -> {bodyCount, bodies:[<decode_polytope dict>, ...]}.
+    Raises if zero convex bodies (concave/compound donor). Use to detect the multi-body case before a
+    Tier-1 swap (which can only patch one body at a time)."""
+    headers = body_headers(phys_block)
+    if not headers:
+        raise Fo4McpError(ErrorCode.INVALID_ARGUMENT,
+                          "no hknpConvexPolytopeShape found (concave hknpCompressedMeshShape or a "
+                          "compound shape is not a convex donor)", {})
+    return {"bodyCount": len(headers),
+            "bodies": [decode_polytope(phys_block, h) for h in headers]}
+
+
 def patch_polytope(phys_block: bytes, hull_verts: list[list[float]],
-                   planes: list[list[float]]) -> bytes:
+                   planes: list[list[float]], header_off: int | None = None) -> bytes:
     """TIER 1: overwrite ONLY the vertex+plane float4 region of the donor bhkPhysicsSystem block,
     in place. Counts MUST match the donor (topology/relocation tables untouched -> robust). Returns a
     new bhkPhysicsSystem block (same length) ready for nif_ops.transplant_physics_system.
+    `header_off` selects which body to patch (default first); pass a value from
+    find_all_polytope_headers to target a specific body of a multi-body donor.
 
     Raises if counts differ (that is the gated Tier-2 full-packfile-author case)."""
-    info = decode_polytope(phys_block)
+    info = decode_polytope(phys_block, header_off)
     if len(hull_verts) != info["vertexCount"] or len(planes) != info["planeCount"]:
         raise Fo4McpError(
             ErrorCode.INVALID_ARGUMENT,
@@ -210,16 +249,39 @@ def _phys_block(meta: dict) -> bytes:
 
 
 def replace_convex_in_nif(target_meta: dict, hull_verts: list[list[float]],
-                          planes: list[list[float]]) -> bytearray:
-    """Patch target's own hknpConvexPolytopeShape verts+planes in place and re-emit the whole nif
-    buffer. Same-count Tier-1 path: the bhkPhysicsSystem keeps its EXACT size (only float4 bytes
-    change), so the block-size table needs no fixup — we reassemble the buffer block-by-block with the
-    one patched block swapped in. (We do NOT route through transplant_physics_system, which guards on a
-    single bhkNPCollisionObject — many pieces, incl. the Foundation donor, carry two.)"""
+                          planes: list[list[float]], body_index: int | None = None) -> bytearray:
+    """Patch target's hknpConvexPolytopeShape verts+planes in place and re-emit the whole nif buffer.
+    Same-count Tier-1 path: the bhkPhysicsSystem keeps its EXACT size (only float4 bytes change), so
+    the block-size table needs no fixup — we reassemble the buffer block-by-block with the one patched
+    block swapped in. (We do NOT route through transplant_physics_system, which guards on a single
+    bhkNPCollisionObject — many pieces, incl. the Foundation donor, carry two.)
+
+    MULTI-BODY GUARD: a single bhkPhysicsSystem packfile can hold several convex bodies. A Tier-1
+    single-hull swap can only patch ONE; patching the first and leaving the rest as the donor's
+    original geometry is a silent wrong-collision. So with >1 body and no `body_index` we REFUSE; pass
+    body_index=0..N-1 to deliberately patch one body (the others keep the donor geometry)."""
     tp = nif_ops._one(target_meta, "bhkPhysicsSystem")
     if tp is None:
         raise Fo4McpError(ErrorCode.INVALID_ARGUMENT, "target nif has no (single) bhkPhysicsSystem block", {})
-    patched = patch_polytope(target_meta["blocks"][tp], hull_verts, planes)  # length-preserving
+    phys = target_meta["blocks"][tp]
+    headers = body_headers(phys)
+    if not headers:
+        raise Fo4McpError(ErrorCode.INVALID_ARGUMENT,
+                          "target nif's bhkPhysicsSystem has no hknpConvexPolytopeShape (not a convex donor)", {})
+    bodies = len(headers)
+    if bodies > 1 and body_index is None:
+        raise Fo4McpError(
+            ErrorCode.INVALID_ARGUMENT,
+            f"donor carries {bodies} convex bodies; a Tier-1 single-hull swap would patch only one and "
+            f"leave the other {bodies - 1} as the donor's original geometry (silent wrong-collision). "
+            f"Pass body_index=0..{bodies - 1} to deliberately patch one body, or use a single-body donor.",
+            {"bodyCount": bodies})
+    idx = 0 if body_index is None else body_index
+    if not (0 <= idx < bodies):
+        raise Fo4McpError(ErrorCode.INVALID_ARGUMENT,
+                          f"body_index {idx} out of range — donor has {bodies} convex bod{'y' if bodies == 1 else 'ies'}",
+                          {"bodyCount": bodies})
+    patched = patch_polytope(phys, hull_verts, planes, headers[idx])        # length-preserving
     new_blocks = list(target_meta["blocks"]); new_blocks[tp] = patched
     out = bytearray(target_meta["buf"][:target_meta["blocks_start"]])        # header + size table unchanged
     for blk in new_blocks:
@@ -234,35 +296,48 @@ def _resolve(cfg: Config, p: str) -> Path:
     return q if q.is_absolute() else (cfg.repo_root / q).resolve()
 
 
-def fo4_inspect_collision(cfg: Config, nif: str) -> dict[str, Any]:
-    """Read-only: decode the hknpConvexPolytopeShape in a nif's bhkPhysicsSystem and report its hull
-    vertices (havok-metric + game-unit) and face planes, plus a scipy self-check (does the hull of
-    the donor's own vertices reproduce the donor's plane set?)."""
-    p = _resolve(cfg, nif)
-    if not p.is_file():
-        raise Fo4McpError(ErrorCode.INVALID_ARGUMENT, f"nif not found: {p}", {})
-    meta = nif_ops.parse(p)
-    dec = decode_polytope(_phys_block(meta))
+def _summarize_body(dec: dict) -> dict[str, Any]:
+    """One hknpConvexPolytopeShape body -> JSON view (metric + game-unit verts, planes, scipy self-check)."""
     regen = compute_hull([v[:3] for v in dec["hullVerts"]], in_game_units=False,
-                          radius=dec["hullVerts"][0][3])
-    return ok({
-        "path": str(p),
+                         radius=dec["hullVerts"][0][3])
+    return {
+        "headerOffset": dec["headerOffset"],
         "vertexCount": dec["vertexCount"], "planeCount": dec["planeCount"],
         "convexRadius": dec["hullVerts"][0][3],
         "hullVertsMetric": [[round(c, 4) for c in v] for v in dec["hullVerts"]],
         "hullVertsGame": [[round(c * HAVOK_TO_GAME, 2) for c in v[:3]] for v in dec["hullVerts"]],
         "planes": [[round(c, 4) for c in pl] for pl in dec["planes"]],
         "scipyReproducesPlanes": _planes_match(dec["planes"], regen["planes"]),
+    }
+
+
+def fo4_inspect_collision(cfg: Config, nif: str) -> dict[str, Any]:
+    """Read-only: decode EVERY hknpConvexPolytopeShape body in a nif's bhkPhysicsSystem and report each
+    body's hull vertices (havok-metric + game-unit) and face planes, plus a scipy self-check (does the
+    hull of the donor's own vertices reproduce its plane set?). `bodyCount` > 1 means a Tier-1 swap
+    must target one body at a time (fo4_make_convex_collision body_index)."""
+    p = _resolve(cfg, nif)
+    if not p.is_file():
+        raise Fo4McpError(ErrorCode.INVALID_ARGUMENT, f"nif not found: {p}", {})
+    meta = nif_ops.parse(p)
+    allp = decode_all_polytopes(_phys_block(meta))
+    return ok({
+        "path": str(p),
+        "bodyCount": allp["bodyCount"],
+        "bodies": [_summarize_body(d) for d in allp["bodies"]],
     })
 
 
 def fo4_make_convex_collision(cfg: Config, donor_nif: str, output_nif: str,
                               verts: list[list[float]], in_game_units: bool = True,
-                              radius: float = DEFAULT_CONVEX_RADIUS) -> dict[str, Any]:
+                              radius: float = DEFAULT_CONVEX_RADIUS,
+                              body_index: int | None = None) -> dict[str, Any]:
     """TIER 1 author: compute the convex hull of `verts`, and IF its vertex/plane counts match the
     donor's hknpConvexPolytopeShape, write a copy of `donor_nif` to `output_nif` with the hull's
-    vertices+planes swapped in (donor packfile/topology otherwise byte-preserved). Output gated to
-    staging/fixtures (Steam Data refused); .bak on overwrite. NOT in-game validated (Faz E gate)."""
+    vertices+planes swapped in (donor packfile/topology otherwise byte-preserved). A donor with >1
+    convex body is REFUSED unless you pass `body_index` (0..N-1) to choose which body to patch — the
+    others keep the donor's geometry. Output gated to staging/fixtures (Steam Data refused); .bak on
+    overwrite. NOT in-game validated (Faz E gate)."""
     don = _resolve(cfg, donor_nif)
     out = _resolve(cfg, output_nif)
     if not don.is_file():
@@ -271,7 +346,7 @@ def fo4_make_convex_collision(cfg: Config, donor_nif: str, output_nif: str,
 
     hull = compute_hull(verts, in_game_units=in_game_units, radius=radius)
     target_meta = nif_ops.parse(don)
-    patched = replace_convex_in_nif(target_meta, hull["hullVerts"], hull["planes"])
+    patched = replace_convex_in_nif(target_meta, hull["hullVerts"], hull["planes"], body_index)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     backup = None
@@ -280,10 +355,16 @@ def fo4_make_convex_collision(cfg: Config, donor_nif: str, output_nif: str,
         backup.write_bytes(out.read_bytes())
     out.write_bytes(patched)
 
-    re = decode_polytope(_phys_block(nif_ops.parse(out)))    # verify the written bytes re-decode
+    out_phys = _phys_block(nif_ops.parse(out))
+    headers = body_headers(out_phys)
+    patched_idx = 0 if body_index is None else body_index
+    re = decode_polytope(out_phys, headers[patched_idx])     # verify the written body re-decodes
     return ok({"output": str(out), "bytes": len(patched), "backup": str(backup) if backup else None,
+               "bodyCount": len(headers), "patchedBody": patched_idx,
                "vertexCount": hull["vertexCount"], "planeCount": hull["planeCount"],
                "writtenVerts": [[round(c, 4) for c in v] for v in re["hullVerts"]],
+               "warning": (f"donor had {len(headers)} convex bodies; only body {patched_idx} was swapped — "
+                           f"the others keep the donor geometry") if len(headers) > 1 else None,
                "ingameValidated": False, "note": "collision geometry swapped; in-game validity is Faz-E gated"})
 
 
