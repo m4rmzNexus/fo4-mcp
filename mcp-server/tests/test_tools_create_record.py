@@ -1853,3 +1853,205 @@ def test_integration_assembly_single_plugin(real_env, staging_out):
                        ("W11aCell", "Cell"), ("W11aNode", "StoryManagerQuestNode")):
         q = fo4_inspect_record(cfg, manifest, str(out), eid)["data"]
         assert q["found"] is True and q["records"][0]["record_type"] == rtype
+
+
+# ---------------- Book/Note (coupon MVP) + LeveledItem override (loot injection) ----------------
+
+def test_create_rejects_book_negative_value(tmp_path):
+    """A book's value reuses the shared item range (>= 0)."""
+    spec = {"records": [{"type": "book", "editorId": "BadBook", "value": -5}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_leveleditemoverride_without_source(tmp_path):
+    """A leveledItemOverride needs a sourcePlugin (the plugin holding the target list)."""
+    spec = {"records": [{"type": "leveledItemOverride", "target": "067396:Fallout4.esm",
+                         "entries": [{"reference": "000800:X.esp"}]}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_leveleditemoverride_without_target(tmp_path):
+    """A leveledItemOverride needs a 'target' (the LVLI FormKey to override)."""
+    spec = {"records": [{"type": "leveledItemOverride", "sourcePlugin": "Fallout4.esm",
+                         "entries": [{"reference": "000800:X.esp"}]}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_book_note_roundtrip(real_env, staging_out):
+    """Coupon MVP: a BOOK authored as a readable note. The body (BookText) round-trips
+    byte-exact — including non-ASCII (cent / em-dash / trademark), which proves the writer's
+    1252 string encoding (InvariantGlobalization removed) survives serialize->disk."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "CouponBook.esp"
+    body = "Save 10¢ on your next tin of CRAM™ — now with 15% more meat-like product!"
+    spec = {"records": [
+        {"type": "book", "editorId": "TestCouponCram", "name": "Cram Rebate",
+         "text": body, "value": 0, "weight": 0},
+    ]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    rec = data["records"][0]
+    assert rec["formKey"].endswith(":CouponBook.esp")
+    assert rec["bookText"] == body          # byte-exact, non-ASCII preserved
+    assert rec["value"] == 0
+    # independently queryable as a Book
+    q = fo4_inspect_record(cfg, manifest, str(out), "TestCouponCram")["data"]
+    assert q["found"] is True and q["records"][0]["record_type"] == "Book"
+
+
+def test_create_leveleditem_override_injection(real_env, staging_out):
+    """Loot injection: a coupon LVLI grafted onto vanilla LL_Food_Packaged (067396) via a
+    leveledItemOverride. ADDITIVE — the 14 vanilla entries (incl. SugarBombs 0330F2) survive
+    and our coupon sub-list is appended; Fallout4.esm auto-adds as master from the preserved
+    FormKey. Needs the FO4 install (the override DeepCopies the live vanilla list)."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    if cfg.fo4_install_dir is None or not (cfg.fo4_install_dir / "Data" / "Fallout4.esm").is_file():
+        pytest.skip("FO4 install (Fallout4.esm) not available for the override DeepCopy")
+    esm = str(cfg.fo4_install_dir / "Data" / "Fallout4.esm")
+    out = staging_out / "CouponInject.esp"
+    spec = {"records": [
+        {"type": "book", "editorId": "InjCouponA", "name": "Coupon A", "text": "free A", "value": 0},
+        {"type": "leveledItem", "editorId": "InjCouponLL",
+         "entries": [{"reference": "000800:CouponInject.esp"}]},   # -> the book at 0x800
+        {"type": "leveledItemOverride", "sourcePlugin": esm, "target": "067396:Fallout4.esm",
+         "entries": [{"reference": "000801:CouponInject.esp"}]},   # -> the LVLI at 0x801
+    ]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    assert data["masters"] == ["Fallout4.esm"]
+    ov = [r for r in data["records"] if r["type"] == "leveledItemOverride"][0]
+    assert ov["formKey"] == "067396:Fallout4.esm"          # true override (master FormKey kept)
+    assert ov["entryCount"] == 15                          # 14 vanilla + our coupon list
+    refs = [e["reference"] for e in ov["entries"]]
+    assert "0330F2:Fallout4.esm" in refs                   # vanilla SugarBombs preserved (additive)
+    assert "000801:CouponInject.esp" in refs               # our coupon sub-list injected
+
+
+def test_create_rejects_materialswap_without_substitutions(tmp_path):
+    """An MSWP needs a non-empty 'substitutions' list (nothing to swap otherwise)."""
+    spec = {"records": [{"type": "materialSwap", "editorId": "EmptySwap", "substitutions": []}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_materialswap_substitution_missing_path(tmp_path):
+    """Each substitution needs BOTH original and replacement .bgsm paths."""
+    spec = {"records": [{"type": "materialSwap", "editorId": "HalfSwap",
+                         "substitutions": [{"original": "Materials\\a.bgsm"}]}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_materialswap_roundtrip(real_env, staging_out):
+    """Coupon visual: an MSWP retexture map. The original->replacement .bgsm pair round-trips,
+    proving the swap survives serialize->disk so a model can reference it."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "CouponSwap.esp"
+    orig = "Materials\\Interface\\Newspaper\\DN101Note.bgsm"
+    repl = "Materials\\PrewarCoupons\\coupon_cram.bgsm"
+    spec = {"records": [
+        {"type": "materialSwap", "editorId": "TestCouponMSWP",
+         "substitutions": [{"original": orig, "replacement": repl}]},
+    ]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    rec = data["records"][0]
+    assert rec["formKey"].endswith(":CouponSwap.esp")
+    assert rec["substitutionCount"] == 1
+    sub = rec["substitutions"][0]
+    assert sub["original"] == orig and sub["replacement"] == repl
+
+
+def test_create_book_with_model_and_materialswap_roundtrip(real_env, staging_out):
+    """Coupon visual end-to-end: a book carries a world-model nif (MODL) + a MaterialSwap link
+    to an in-plugin MSWP (minted at 0x800, so the book at 0x801 references it). modelFile and
+    the swap FormKey both round-trip — the on-disk wiring that makes the coupon show its art."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "CouponVisual.esp"
+    spec = {"records": [
+        {"type": "materialSwap", "editorId": "VisCouponMSWP",
+         "substitutions": [{"original": "Materials\\Interface\\Newspaper\\DN101Note.bgsm",
+                            "replacement": "Materials\\PrewarCoupons\\coupon_cram.bgsm"}]},
+        {"type": "book", "editorId": "VisCoupon", "name": "Cram Coupon", "text": "5¢ off",
+         "value": 0, "weight": 0.1, "model": "Props\\DN101Note.nif",
+         "materialSwap": "000800:CouponVisual.esp"},
+    ]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    book = [r for r in data["records"] if r["type"] == "book"][0]
+    assert book["modelFile"] == "Props\\DN101Note.nif"
+    assert book["materialSwap"] == "000800:CouponVisual.esp"   # links the MSWP minted first
+
+
+def test_create_rejects_misc_negative_value(tmp_path):
+    """MISC shares the item value range with book/armor: a negative value is rejected."""
+    spec = {"records": [{"type": "misc", "editorId": "BadMisc", "value": -5}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_misc_clutter_roundtrip(real_env, staging_out):
+    """Coupon-as-MISC (pickupable clutter, the BOOK->MISC pivot — books don't pair with DYNAMIC
+    havok). name + world-model nif (MODL) + value/weight round-trip, and the record is
+    independently queryable as a MiscItem (proves the new writer case + readback)."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "CouponMisc.esp"
+    spec = {"records": [
+        {"type": "misc", "editorId": "TestCouponMisc", "name": "Cram™ Rebate",
+         "value": 0, "weight": 0.0, "model": "PrewarCoupons\\coupon_cram.nif"},
+    ]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    rec = data["records"][0]
+    assert rec["type"] == "misc"
+    assert rec["formKey"].endswith(":CouponMisc.esp")
+    assert rec["name"] == "Cram™ Rebate"                       # non-ASCII preserved
+    assert rec["modelFile"] == "PrewarCoupons\\coupon_cram.nif"
+    assert rec["value"] == 0
+    # independently queryable as a MiscItem (not a Book)
+    q = fo4_inspect_record(cfg, manifest, str(out), "TestCouponMisc")["data"]
+    assert q["found"] is True and q["records"][0]["record_type"] == "MiscItem"
+
+
+def test_create_misc_obnd_nonzero(real_env, staging_out):
+    """OBND regression guard: a model-bearing MISC must NOT ship all-zero Object Bounds — that was
+    the coupon no-show / dead-Inspect root cause (FO4 frames the inventory preview camera from OBND).
+    Explicit objectBounds round-trips; omitting it still yields a non-zero default (never zero)."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "CouponObnd.esp"
+    spec = {"records": [
+        {"type": "misc", "editorId": "ObndExplicit", "name": "Bounded",
+         "model": "PrewarCoupons\\coupon_cram.nif", "objectBounds": [-5, -4, -1, 5, 4, 1]},
+        {"type": "misc", "editorId": "ObndDefault", "name": "Defaulted",
+         "model": "PrewarCoupons\\coupon_cram.nif"},   # no objectBounds -> writer default, still non-zero
+    ]}
+    recs = fo4_create_record(cfg, manifest, spec, str(out))["data"]["records"]
+    explicit = [r for r in recs if r["formKey"].endswith(":CouponObnd.esp")][0]
+    assert explicit["objectBounds"] == [-5, -4, -1, 5, 4, 1]
+    assert all(r.get("objectBoundsZero") is False for r in recs)   # neither ships a zero box
+
+
+def test_create_misc_preview_transform(real_env, staging_out):
+    """PTRN regression guard: a flat-MISC's Pip-Boy/Inspect 3D preview is framed by a Preview Transform
+    (TRNS record), which is SEPARATE from the world Model. Missing PTRN = blank inventory preview (the
+    coupon no-show second root cause). previewTransform must round-trip onto the MISC record."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "CouponPtrn.esp"
+    spec = {"records": [
+        {"type": "misc", "editorId": "PtrnFramed", "name": "Framed",
+         "model": "PrewarCoupons\\coupon_cram.nif", "objectBounds": [-5, -4, -1, 5, 4, 1],
+         "previewTransform": "1CF028:Fallout4.esm"},
+    ]}
+    recs = fo4_create_record(cfg, manifest, spec, str(out))["data"]["records"]
+    rec = [r for r in recs if r["formKey"].endswith(":CouponPtrn.esp")][0]
+    assert rec["previewTransform"] == "1CF028:Fallout4.esm"

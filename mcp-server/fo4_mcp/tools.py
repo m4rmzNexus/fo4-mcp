@@ -551,7 +551,7 @@ def _inspect_record_via_cli(
 # ---- Tool 3j: create record (authoring writer) ------------------------------
 
 # Record types the mutagen-cli `create` subcommand can author.
-_CREATE_SUPPORTED_TYPES = ("npc", "armor", "quest", "keyword", "formlist", "message", "global", "faction", "levelednpc", "leveleditem", "cell", "celloverride", "smqn", "activator", "location", "locationreftype", "encounterzone", "package")
+_CREATE_SUPPORTED_TYPES = ("npc", "armor", "quest", "keyword", "formlist", "message", "global", "faction", "levelednpc", "leveleditem", "leveleditemoverride", "cell", "celloverride", "smqn", "activator", "location", "locationreftype", "encounterzone", "package", "book", "misc", "materialswap")
 
 # Papyrus VMAD script-property value types the writer maps to ScriptProperty subclasses.
 _SCRIPT_PROPERTY_TYPES = ("object", "int", "float", "bool", "string")
@@ -969,13 +969,13 @@ def fo4_create_record(
                 ErrorCode.INVALID_ARGUMENT,
                 f"spec.records[{i}].type '{rtype}' unsupported "
                 f"(Npc, Armor, Quest, Keyword, FormList, Message, Global, Faction, "
-                f"LeveledNpc, LeveledItem, Cell, CellOverride, Smqn, Activator, "
-                f"Location, LocationRefType, EncounterZone, Package)",
+                f"LeveledNpc, LeveledItem, LeveledItemOverride, Cell, CellOverride, Smqn, "
+                f"Activator, Location, LocationRefType, EncounterZone, Package, Book)",
                 {"supported": list(_CREATE_SUPPORTED_TYPES)},
             )
-        if not eid and rtype.lower() != "celloverride":
-            # a cellOverride identifies its target by FormKey (the master's editorId carries
-            # forward via DeepCopy), so it alone needs no editorId.
+        if not eid and rtype.lower() not in ("celloverride", "leveleditemoverride"):
+            # an override (cell / leveled-item) identifies its target by FormKey (the master's
+            # editorId carries forward via DeepCopy), so it needs no editorId.
             raise Fo4McpError(
                 ErrorCode.INVALID_ARGUMENT, f"spec.records[{i}] missing editorId", {}
             )
@@ -1435,6 +1435,34 @@ def fo4_create_record(
                                 rentry["conditions"] = _norm_conditions(
                                     conds, f"{rloc}.conditions"
                                 )
+                            # P0: script-free INFO -> owning-quest stage advance (SNAM SetParentQuestStage).
+                            # {onBegin?, onEnd?}; a wheel pick sets the quest stage with no Papyrus.
+                            sps = resp.get("setParentQuestStage")
+                            if sps is not None:
+                                if not isinstance(sps, dict):
+                                    raise Fo4McpError(
+                                        ErrorCode.INVALID_ARGUMENT,
+                                        f"{rloc}.setParentQuestStage must be an object", {}
+                                    )
+                                sentry: dict[str, Any] = {}
+                                for skey in ("onBegin", "onEnd"):
+                                    if sps.get(skey) is not None:
+                                        try:
+                                            sv = int(sps[skey])
+                                        except (TypeError, ValueError):
+                                            raise Fo4McpError(
+                                                ErrorCode.INVALID_ARGUMENT,
+                                                f"{rloc}.setParentQuestStage.{skey} must be an integer", {}
+                                            )
+                                        if not -1 <= sv <= 32767:
+                                            raise Fo4McpError(
+                                                ErrorCode.INVALID_ARGUMENT,
+                                                f"{rloc}.setParentQuestStage.{skey} out of range (-1..32767)",
+                                                {skey: sv},
+                                            )
+                                        sentry[skey] = sv
+                                if sentry:
+                                    rentry["setParentQuestStage"] = sentry
                             norm_resps.append(rentry)
                         topic["responses"] = norm_resps
                     norm_topics.append(topic)
@@ -1861,6 +1889,101 @@ def fo4_create_record(
                 rec["text"] = str(r["text"])
             if r.get("title") is not None:
                 rec["name"] = str(r["title"])
+        elif rtype.lower() in ("book", "misc"):
+            # BOOK/note OR MISC clutter (coupon): value/weight reuse the shared item ranges;
+            # keywords is a FormKey list; model = world-model nif (+ optional materialSwap).
+            # BOOK adds text -> BookText (readable body) + name -> title; MISC has no text/note
+            # UI and gets picked straight into inventory (the pickupable-coupon record type).
+            if r.get("text") is not None:
+                rec["text"] = str(r["text"])
+            if r.get("value") is not None:
+                try:
+                    bval = int(r["value"])
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].value must be an integer", {})
+                if bval < 0:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].value must be >= 0", {"value": bval})
+                rec["value"] = bval
+            if r.get("weight") is not None:
+                try:
+                    bwt = float(r["weight"])
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].weight must be a number", {})
+                if bwt < 0:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].weight must be >= 0", {"weight": bwt})
+                rec["weight"] = bwt
+            kws = r.get("keywords")
+            if kws is not None:
+                if not isinstance(kws, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].keywords must be a list", {})
+                rec["keywords"] = [str(k).strip() for k in kws]
+            # Visual: model = world-model nif path (MODL); materialSwap = MSWP FormKey that
+            # retextures it. Both optional — without them the note is still readable.
+            if r.get("model") is not None:
+                rec["model"] = str(r["model"]).strip()
+            if r.get("materialSwap") is not None:
+                rec["materialSwap"] = str(r["materialSwap"]).strip()
+            # OBND: object bounds [x1,y1,z1,x2,y2,z2] (Int16). A model-bearing MISC needs a
+            # non-zero box or FO4 can't frame the inventory preview / Inspect (the coupon no-show
+            # bug). Optional — the CLI defaults to PrewarMoney's flat-card box when omitted.
+            ob = r.get("objectBounds")
+            if ob is not None:
+                if not isinstance(ob, list) or len(ob) != 6:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be [x1,y1,z1,x2,y2,z2]", {})
+                try:
+                    obi = [int(v) for v in ob]
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be 6 integers", {})
+                if any(v < -32768 or v > 32767 for v in obi):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds values must be Int16 (-32768..32767)", {})
+                rec["objectBounds"] = obi
+            # PTRN: Preview Transform — FormKey of a TRNS that frames the model in the Pip-Boy/
+            # Inspect preview (a SEPARATE render path from the world model). Without it a flat
+            # item default-frames edge-on -> blank preview. e.g. "1CF028:Fallout4.esm" (OverdueBook).
+            pt = r.get("previewTransform")
+            if pt is not None:
+                pts = str(pt).strip()
+                if pts:
+                    rec["previewTransform"] = pts
+        elif rtype.lower() == "materialswap":
+            # MSWP: a retexture map. substitutions = [{original, replacement}] .bgsm paths
+            # (Data-relative, "Materials\...\x.bgsm"). The CLI does the authoritative add.
+            subs = r.get("substitutions")
+            if not isinstance(subs, list) or not subs:
+                raise Fo4McpError(
+                    ErrorCode.INVALID_ARGUMENT,
+                    f"spec.records[{i}] (materialSwap) needs a non-empty 'substitutions' list", {})
+            norm_subs: list[dict[str, Any]] = []
+            for j, s in enumerate(subs):
+                if not isinstance(s, dict):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].substitutions[{j}] must be an object", {})
+                orig = str(s.get("original", "")).strip()
+                repl = str(s.get("replacement", "")).strip()
+                if not orig or not repl:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].substitutions[{j}] needs both 'original' and 'replacement'",
+                        {})
+                norm_subs.append({"original": orig, "replacement": repl})
+            rec["substitutions"] = norm_subs
         elif rtype.lower() == "global":
             # globalType selects the concrete subclass (float|int|short; default
             # float); globalValue is the Data scalar. The CLI does the authoritative
@@ -1925,7 +2048,7 @@ def fo4_create_record(
         # authoritative LeveledNpc.Flag/LeveledItem.Flag parse — note bit 4 is CalculateAll for
         # LVLN vs UseAll for LVLI) + entries [{reference FormKey, level/count int 1..32767}].
         # chanceNone/Global/MaxCount/FilterKeywordChances deferred (§2 — refinements).
-        elif rtype.lower() in ("levelednpc", "leveleditem"):
+        elif rtype.lower() in ("levelednpc", "leveleditem", "leveleditemoverride"):
             flags = r.get("flags")
             if flags is not None:
                 if not isinstance(flags, list):
@@ -1970,6 +2093,24 @@ def fo4_create_record(
                         "reference": str(en["reference"]).strip(), "level": level, "count": count,
                     })
                 rec["entries"] = norm_entries
+            # W3e-inject: LeveledItemOverride grafts the entries above onto an EXISTING (master)
+            # LVLI. Needs sourcePlugin (holds the target list) + target (the LVLI FormKey). ADDITIVE
+            # unless clearExisting wipes the vanilla entries. The CLI DeepCopies it as an override.
+            if rtype.lower() == "leveleditemoverride":
+                sp = str(r.get("sourcePlugin", "")).strip()
+                if not sp:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}] (leveledItemOverride) needs 'sourcePlugin'", {})
+                rec["sourcePlugin"] = sp
+                tgt = str(r.get("target", "")).strip()
+                if not tgt:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}] (leveledItemOverride) needs 'target' (LVLI FormKey)", {})
+                rec["target"] = tgt
+                if r.get("clearExisting") is not None:
+                    rec["clearExisting"] = bool(r["clearExisting"])
         elif rtype.lower() == "cell":
             # W4 interior CELL + nested placed refs (REFR/ACHR). FormLink scalars are
             # light-validated here; the CLI does the authoritative FormKey parse + master
