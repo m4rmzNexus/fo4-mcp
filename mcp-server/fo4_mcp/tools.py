@@ -2074,10 +2074,27 @@ def fo4_create_record(
         # construction (abstract-Global subclass dispatch, FormKey parse via TryKey,
         # int/short range) — Python validates shape and passes through.
         elif rtype.lower() == "keyword":
-            # Bare KYWD: editorId-only (+ shared name handled above). No keyword-
-            # specific MVP fields; the elif exists so the type is accepted and
-            # future fields (color/type) have a home.
-            pass
+            # KYWD: editorId (+ shared name). Workshop-build-menu category keywords need
+            # BOTH a CNAM color [r,g,b]/[a,r,g,b] (button is drawn from it) AND TNAM
+            # keywordType=9 (RecipeFilter) — the menu only traverses RecipeFilter keywords,
+            # so a typeless keyword loads but never renders. Plain keywords omit both.
+            color = r.get("color")
+            if color is not None:
+                if (not isinstance(color, (list, tuple))
+                        or len(color) not in (3, 4)
+                        or not all(isinstance(c, int) and 0 <= c <= 255 for c in color)):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].color must be [r,g,b] or [a,r,g,b] ints 0..255", {})
+                rec["color"] = [int(c) for c in color]
+            kwt = r.get("keywordType")
+            if kwt is not None:
+                try:
+                    rec["keywordType"] = int(kwt)
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].keywordType must be an integer (9 = RecipeFilter)", {})
         elif rtype.lower() == "formlist":
             items = r.get("items")
             if items is not None:

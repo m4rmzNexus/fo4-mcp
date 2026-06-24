@@ -2308,6 +2308,11 @@ static int RunCreate(string[] argv)
                     else if (col.Length == 4) kywd.Color = System.Drawing.Color.FromArgb(col[0], col[1], col[2], col[3]);
                     else return Fail("keyword color needs [r,g,b] or [a,r,g,b]");
                 }
+                // TNAM Type — REQUIRED for a workshop-build-menu filter keyword. The build-menu UI only
+                // traverses keywords whose Type == RecipeFilter (9); a typeless keyword loads (help finds
+                // it) but is invisible to the menu, so the category never renders. Vanilla + BuildingBlocks
+                // filter keywords are all Type=9. Plain (non-menu) keywords leave this null.
+                if (r.KeywordType is { } kt) kywd.Type = (Keyword.TypeEnum)kt;
                 formKey = kywd.FormKey.ToString();
                 break;
             }
@@ -2352,11 +2357,18 @@ static int RunCreate(string[] argv)
                 var floOvl = srcFlst.DeepCopy();
                 if (r.ClearExisting ?? false) floOvl.Items.Clear();
                 if (r.Items is { Count: > 0 })
+                {
+                    // Workshop build menus cap how many categories render; appended-past-the-cap items are
+                    // silently dropped. insertAt grafts new items near the front (BuildingBlocks inserts its
+                    // category at index 1) so a custom category stays within the visible cap. null = append.
+                    int insAt = r.InsertAt ?? floOvl.Items.Count;
+                    if (insAt < 0 || insAt > floOvl.Items.Count) return Fail($"insertAt {insAt} out of range 0..{floOvl.Items.Count}");
                     foreach (var it in r.Items)
                     {
                         if (!TryKey(it, out var ik, out var ie)) return Fail(ie);
-                        floOvl.Items.Add(new FormLink<IFallout4MajorRecordGetter>(ik));
+                        floOvl.Items.Insert(insAt++, new FormLink<IFallout4MajorRecordGetter>(ik));
                     }
+                }
                 mod.FormLists.RecordCache.Add(floOvl);
                 formKey = floOvl.FormKey.ToString();
                 break;
@@ -4012,6 +4024,7 @@ class RecordSpec
     public short[]? ObjectBounds { get; set; }     // OBND: [x1,y1,z1,x2,y2,z2] (Int16) — MISC inventory/inspect bounds
     public string? PreviewTransform { get; set; }  // PTRN: FormKey of a TRNS — frames model in Pip-Boy/Inspect preview
     public int[]? Color { get; set; }              // KYWD CNAM color [r,g,b] or [a,r,g,b] — workshop-menu category button
+    public int? KeywordType { get; set; }          // KYWD TNAM Type enum — 9 (RecipeFilter) REQUIRED for workshop build-menu filter keywords; null = plain keyword
     public int? ArmorRating { get; set; }          // DNAM armor rating (UInt16, 0-65535)
     public List<string>? BipedSlots { get; set; }  // BipedObjectFlag names (OR'd) -> BipedBodyTemplate
     public List<string>? Armatures { get; set; }   // ARMA addon FormLinks -> armo.Armatures (worn mesh; reuses Race below)
@@ -4072,6 +4085,7 @@ class RecordSpec
     public string? Cell { get; set; }               // target cell FormKey "<6hex>:<master>"
     public string? Target { get; set; }             // override target FormKey (leveledItemOverride)
     public bool? ClearExisting { get; set; }         // clear deep-copied refs (default FALSE — additive; opt in to wipe)
+    public int? InsertAt { get; set; }               // flstOverride: insert new items at this index (default null = append). Workshop menus cap displayed categories — insert near the front (e.g. 1) so a custom category isn't dropped past the cap.
     // W6 Story Manager Quest Node (Faz 3) — reuses Flags for AStoryManagerNode.Flag
     public string? Parent { get; set; }             // SNAM: parent SM node FormLink
     public string? PreviousSibling { get; set; }    // sibling-ordering FormLink
