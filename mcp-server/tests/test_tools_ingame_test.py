@@ -9,6 +9,7 @@ the success-judging logic.
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,18 @@ def test_render_default_mcploop():
     assert "cmd startquest {Q}" in lines
     assert "cmd setstage {Q} 10" in lines
     assert job.endswith("\n")
+
+
+def test_render_jobid_line_is_first_data_line():
+    job = render_job({
+        "commands": ["startquest {Q}"],
+        "resolves": [{"key": "Q", "plugin": "MCPLoopTest.esp", "form_id": "0x800"}],
+    }, job_id="deadbeef" * 4)
+    lines = job.splitlines()
+    assert lines[0].startswith("#")            # header comment first
+    assert lines[1] == "jobid " + "deadbeef" * 4  # provenance as first DATA line
+    # default (no job_id) omits the line entirely (back-compat with old job files)
+    assert "jobid" not in render_job({"commands": ["qqq"]})
 
 
 def test_render_save_modes():
@@ -201,6 +214,7 @@ def _prep_execute(tmp_path: Path) -> tuple[Config, Path, Path]:
     (mo2 / "ModOrganizer.exe").write_bytes(b"MZ")
     docs = tmp_path / "docs"
     (docs / "Logs" / "Script").mkdir(parents=True)
+    (docs / "F4SE").mkdir(parents=True)  # crash-log dir (empty -> no crash by default)
     papyrus = docs / "Logs" / "Script" / "Papyrus.0.log"
     tmpl = tmp_path / "tools" / "commonlibf4-template"
     tmpl.mkdir(parents=True)
@@ -304,3 +318,206 @@ def test_execute_killed_hang_when_no_exit(tmp_path, monkeypatch):
     assert data["killed_hung"] is True
     assert data["plugin_timed_out"] is True
     assert data["success"] is False
+
+
+# ---------------- OS-09: job provenance / path-desync guard ----------------
+
+def _written_job_id(tmp_path: Path) -> str:
+    """Read the per-run jobid the orchestrator wrote into the rendered job file."""
+    job = (tmp_path / "tools" / "commonlibf4-template" / "ingame-job.txt").read_text()
+    for line in job.splitlines():
+        if line.startswith("jobid "):
+            return line.split(None, 1)[1].strip()
+    raise AssertionError("no jobid line in written job file")
+
+
+def test_execute_job_confirmed_happy_path(tmp_path, monkeypatch):
+    """A diag echoing the matching jobid + correct counts -> job_confirmed True."""
+    cfg, diag, _papyrus = _prep_execute(tmp_path)
+    _patch_runtime(monkeypatch, [2000, None])
+
+    # capture the job_id the orchestrator will write by writing the diag from a fake
+    # _read_text? simpler: run once is not possible — instead pre-stage the diag AFTER
+    # we know the id. Render is deterministic per-call, so we compute via a pre-pass:
+    # easiest is to monkeypatch _launch_detached to fill the diag using the just-written job.
+    def _fill_diag(exe, arg):
+        jid = _written_job_id(tmp_path)
+        diag.write_text(
+            f"[job] loaded: 1 resolves, 1 cmds, save=0 settle=4000 gap=1500 post=8000 jobid={jid}\n"
+            "[seq] UI: qqq (auto-quit)\n"
+        )
+    monkeypatch.setattr(ingame_test, "_launch_detached", _fill_diag)
+
+    out = fo4_run_ingame_test(
+        cfg,
+        {"commands": ["setstage {Q} 10"],
+         "resolves": [{"key": "Q", "plugin": "MCPLoopTest.esp", "form_id": "0x800"}]},
+        dry_run=False,
+    )
+    data = out["data"]
+    assert data["job_confirmed"] is True
+    assert data["job_no_file"] is False
+    assert data["job_loaded_resolves"] == 1
+    assert data["job_loaded_cmds"] == 1
+    assert data["success"] is True
+
+
+def test_execute_no_job_file_is_false_positive_guard(tmp_path, monkeypatch):
+    """The core bug: DefaultJob fallback emits '[seq] UI: qqq' but '[job] no job file'.
+    Provenance must force success=False even though the sequence 'completed'."""
+    cfg, diag, _papyrus = _prep_execute(tmp_path)
+    diag.write_text(
+        "[job] no job file; using built-in default (MCPLoopTest)\n"
+        "[seq] UI: qqq (auto-quit)\n"
+    )
+    _patch_runtime(monkeypatch, [2000, None])
+
+    out = fo4_run_ingame_test(cfg, {"commands": ["qqq"]}, dry_run=False)
+    data = out["data"]
+    assert data["job_no_file"] is True
+    assert data["job_confirmed"] is False
+    assert data["sequence_completed"] is True   # the trap: it looks done
+    assert data["success"] is False             # ...but provenance fails it
+
+
+def test_execute_stale_jobid_mismatch_fails(tmp_path, monkeypatch):
+    """A diag from a PREVIOUS run (different jobid) -> job_confirmed False."""
+    cfg, diag, _papyrus = _prep_execute(tmp_path)
+    diag.write_text(
+        "[job] loaded: 1 resolves, 1 cmds, save=0 settle=4000 gap=1500 post=8000 "
+        "jobid=00000000000000000000000000000000\n"
+        "[seq] UI: qqq (auto-quit)\n"
+    )
+    _patch_runtime(monkeypatch, [2000, None])
+
+    out = fo4_run_ingame_test(
+        cfg,
+        {"commands": ["setstage {Q} 10"],
+         "resolves": [{"key": "Q", "plugin": "MCPLoopTest.esp", "form_id": "0x800"}]},
+        dry_run=False,
+    )
+    data = out["data"]
+    assert data["job_confirmed"] is False
+    assert data["success"] is False
+
+
+def test_execute_count_mismatch_same_id_fails(tmp_path, monkeypatch):
+    """Correct jobid but the loaded cmd count != spec -> job_confirmed False."""
+    cfg, diag, _papyrus = _prep_execute(tmp_path)
+    _patch_runtime(monkeypatch, [2000, None])
+
+    def _fill_diag(exe, arg):
+        jid = _written_job_id(tmp_path)
+        diag.write_text(
+            f"[job] loaded: 1 resolves, 0 cmds, save=0 settle=4000 gap=1500 post=8000 jobid={jid}\n"
+            "[seq] UI: qqq (auto-quit)\n"
+        )
+    monkeypatch.setattr(ingame_test, "_launch_detached", _fill_diag)
+
+    out = fo4_run_ingame_test(
+        cfg,
+        {"commands": ["setstage {Q} 10", "setstage {Q} 20"],
+         "resolves": [{"key": "Q", "plugin": "MCPLoopTest.esp", "form_id": "0x800"}]},
+        dry_run=False,
+    )
+    data = out["data"]
+    assert data["job_confirmed"] is False
+    assert data["success"] is False
+
+
+def test_execute_old_dll_no_job_line_falls_back(tmp_path, monkeypatch):
+    """Compat shim: an OLD DLL emits NO '[job] loaded:' line -> job_confirmed None,
+    legacy success rule still applies (don't break the proven pipeline pre-rebuild)."""
+    cfg, diag, _papyrus = _prep_execute(tmp_path)
+    diag.write_text("[seq] UI: qqq (auto-quit)\n")  # no [job] line at all
+    _patch_runtime(monkeypatch, [2000, None])
+
+    out = fo4_run_ingame_test(cfg, {"commands": ["qqq"]}, dry_run=False)
+    data = out["data"]
+    assert data["job_confirmed"] is None
+    assert data["success"] is True  # legacy rule honored
+
+
+def test_dry_run_plan_has_job_id(tmp_path):
+    out = fo4_run_ingame_test(
+        _cfg(tmp_path, mo2=tmp_path / "mo2", docs=tmp_path / "docs"),
+        {"commands": ["qqq"]},
+        dry_run=True,
+    )
+    data = out["data"]
+    assert len(data["job_id"]) == 32                 # uuid4 hex
+    assert f"jobid {data['job_id']}" in data["job_text"]
+
+
+# ---------------- OS-10: crash-log detection in judging ----------------
+
+def test_execute_crash_forces_failure(tmp_path, monkeypatch):
+    """A fresh crash-*.log during the run window -> crashed True -> success False,
+    even though papyrus matched and the sequence completed."""
+    cfg, diag, papyrus = _prep_execute(tmp_path)
+    diag.write_text("[seq] UI: qqq (auto-quit)\n")
+    papyrus.write_text("[06/20/2026] [FAZ22] fired\n")
+    _patch_runtime(monkeypatch, [2000, None])
+
+    crash = cfg.fo4_user_docs / "F4SE" / "crash-2026-06-24-120000.log"
+
+    def _fill_crash(exe, arg):
+        crash.write_text(
+            "Fallout 4 v1.11.221\n"
+            "Buffout 4 v1.31.1\n"
+            "Unhandled exception \"EXCEPTION_ACCESS_VIOLATION\" at "
+            "0x7FF6 Fallout4.exe+0001234\n"
+            "PROBABLE CALL STACK:\n"
+            "\t[0] 0x7FF6 SomeMod.dll+00ABCDE\n"
+        )
+    monkeypatch.setattr(ingame_test, "_launch_detached", _fill_crash)
+
+    out = fo4_run_ingame_test(
+        cfg,
+        {"commands": ["setstage {Q} 10"],
+         "resolves": [{"key": "Q", "plugin": "MCPLoopTest.esp", "form_id": "0x800"}],
+         "success_pattern": "FAZ22"},
+        dry_run=False,
+    )
+    data = out["data"]
+    assert data["crashed"] is True
+    assert data["crash_log"].endswith("crash-2026-06-24-120000.log")
+    assert data["crash_summary"] is not None
+    assert data["success"] is False
+
+
+def test_execute_stale_crash_ignored(tmp_path, monkeypatch):
+    """A crash-*.log with an OLD mtime (predating the run) is ignored -> success stays True."""
+    import os as _os
+
+    cfg, diag, _papyrus = _prep_execute(tmp_path)
+    diag.write_text("[seq] UI: qqq (auto-quit)\n")
+    stale = cfg.fo4_user_docs / "F4SE" / "crash-old.log"
+    stale.write_text("old crash, irrelevant\n")
+    old = time.time() - 3600
+    _os.utime(stale, (old, old))
+    _patch_runtime(monkeypatch, [2000, None])
+
+    out = fo4_run_ingame_test(cfg, {"commands": ["qqq"]}, dry_run=False)
+    data = out["data"]
+    assert data["crashed"] is False
+    assert data["crash_log"] is None
+    assert data["success"] is True
+
+
+def test_execute_no_crash_dir_is_safe(tmp_path, monkeypatch):
+    """No fo4_user_docs (crash_dir None) -> crashed False, no exception."""
+    mo2 = tmp_path / "mo2"
+    mo2.mkdir()
+    (mo2 / "ModOrganizer.exe").write_bytes(b"MZ")
+    tmpl = tmp_path / "tools" / "commonlibf4-template"
+    tmpl.mkdir(parents=True)
+    diag = tmpl / "runner-diag.log"
+    diag.write_text("[seq] UI: qqq (auto-quit)\n")
+    cfg = _cfg(tmp_path, mo2=mo2, docs=None)
+    _patch_runtime(monkeypatch, [2000, None])
+
+    out = fo4_run_ingame_test(cfg, {"commands": ["qqq"]}, dry_run=False)
+    data = out["data"]
+    assert data["crashed"] is False
+    assert data["success"] is True

@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -67,7 +68,7 @@ def _norm_formid(v: Any) -> str:
     return f"0x{n:X}"
 
 
-def render_job(spec: dict[str, Any]) -> str:
+def render_job(spec: dict[str, Any], *, job_id: str | None = None) -> str:
     """Render the line-based job file the runner plugin reads. Pure + validating.
 
     spec keys:
@@ -76,6 +77,10 @@ def render_job(spec: dict[str, Any]) -> str:
         save             "quickload" (default) | "mostrecent" | "coc:<cell>"
         settle_ms/gap_ms/post_ms   optional timing ints
     (success_pattern / *_timeout_s are consumed by the orchestrator, not the job.)
+
+    job_id: optional per-run provenance token; emitted as the first data line so
+    the plugin can echo it back into the diag, letting the orchestrator prove the
+    diag came from THIS rendered job (not a stale file or the built-in default).
     """
     if not isinstance(spec, dict):
         raise _bad("spec must be a dict")
@@ -154,7 +159,10 @@ def render_job(spec: dict[str, Any]) -> str:
 
         nav_line = f"navtest {npc} {_navint('sample_ms', 1000)} {_navint('duration_s', 15)}"
 
-    lines = ["# fo4-mcp in-game test job (generated; do not edit by hand)", save_line]
+    lines = ["# fo4-mcp in-game test job (generated; do not edit by hand)"]
+    if job_id:
+        lines.append(f"jobid {job_id}")
+    lines.append(save_line)
     lines += res_lines
     lines += [f"settle_ms {_ms('settle_ms', 4000)}",
               f"gap_ms {_ms('gap_ms', 1500)}",
@@ -190,6 +198,30 @@ def _launch_detached(exe: Path, arg: str) -> None:
         )
 
 
+def parse_tasklist_csv(out: str, image: str) -> tuple[bool, int | None]:
+    """Parse `tasklist /FO CSV /NH` stdout for `image`; pure + exact-field.
+
+    Returns (running, ws_mb). Each CSV row is "Image","PID",...,"Mem Usage K";
+    we match field 0 EXACTLY (not a substring) so a row that merely embeds the
+    image name as a path fragment can't false-positive. ws_mb is the working set
+    in MB (last field, "12,345 K") or None when it can't be parsed."""
+    for line in out.splitlines():
+        line = line.strip()
+        if not line.startswith('"'):
+            continue  # "INFO: No tasks..." when absent
+        fields = [f.strip('"') for f in line.split('","')]
+        if not fields or fields[0].lower() != image.lower():
+            continue
+        mem = fields[-1].upper().replace(",", "").replace("K", "").strip() if len(fields) >= 5 else ""
+        return True, (int(mem) // 1024 if mem.isdigit() else None)
+    return False, None
+
+
+def _proc_present(out: str, image: str) -> bool:
+    """True if `image` is an EXACT field-0 match in tasklist CSV stdout."""
+    return parse_tasklist_csv(out, image)[0]
+
+
 def _tasklist_ws_mb(image: str) -> int | None:
     """Working-set MB of a running process by image name; None if not running.
     Used to tell a real game (WS>200MB) from the ~25MB Steam DRM stub."""
@@ -200,16 +232,7 @@ def _tasklist_ws_mb(image: str) -> int | None:
         ).stdout
     except (subprocess.SubprocessError, OSError):
         return None
-    for line in out.splitlines():
-        line = line.strip()
-        if not line.startswith('"'):
-            continue  # "INFO: No tasks..." when absent
-        fields = [f.strip('"') for f in line.split('","')]
-        if len(fields) >= 5 and fields[0].lower() == image.lower():
-            mem = fields[-1].upper().replace(",", "").replace("K", "").strip()
-            if mem.isdigit():
-                return int(mem) // 1024
-    return None
+    return parse_tasklist_csv(out, image)[1]
 
 
 def _kill(image: str) -> None:
@@ -240,6 +263,33 @@ def _read_text(path: Path) -> str:
         return ""
 
 
+def _crash_dir(cfg: Config) -> Path | None:
+    """The proven F4SE crash-log location: Documents/My Games/Fallout4/F4SE."""
+    return (cfg.fo4_user_docs / "F4SE") if cfg.fo4_user_docs else None
+
+
+def _list_crash_logs(crash_dir: Path) -> set[Path]:
+    """Current crash-*.log files in the F4SE dir (snapshotted pre/post run)."""
+    try:
+        return {p for p in crash_dir.glob("crash-*.log") if p.is_file()}
+    except OSError:
+        return set()
+
+
+def _newest_new_crash(crash_dir: Path, before: set[Path]) -> Path | None:
+    """Newest crash-*.log that appeared since `before` was snapshotted (i.e. during
+    the run), else None.
+
+    A CTD makes Fallout4.exe vanish just like a clean qqq exit, so a brand-new
+    crash log is the disambiguator. A filename snapshot (vs an mtime window) can't
+    be fooled by a pre-existing log written near run-start — Buffout names each
+    crash uniquely (crash-<timestamp>.log)."""
+    new = [p for p in _list_crash_logs(crash_dir) if p not in before]
+    if not new:
+        return None
+    return max(new, key=lambda p: p.stat().st_mtime)
+
+
 # ---- orchestration ------------------------------------------------------------
 
 def fo4_run_ingame_test(
@@ -253,7 +303,11 @@ def fo4_run_ingame_test(
     Returns ok({...}). dry_run=True returns the rendered job + launch plan only.
     A live run blocks for up to appear_timeout_s + run_timeout_s seconds.
     """
-    job_text = render_job(spec)  # validates everything first
+    job_id = uuid.uuid4().hex
+    job_text = render_job(spec, job_id=job_id)  # validates everything first
+    # Expected provenance counts (spec already validated by render_job above).
+    expected_resolves = len(spec.get("resolves") or [])
+    expected_cmds = len(spec["commands"])
 
     success_pattern = spec.get("success_pattern")
     if success_pattern is not None and not isinstance(success_pattern, str):
@@ -269,6 +323,7 @@ def fo4_run_ingame_test(
     papyrus = (cfg.fo4_user_docs / "Logs" / "Script" / "Papyrus.0.log") if cfg.fo4_user_docs else None
 
     plan = {
+        "job_id": job_id,
         "job_path": str(job_path),
         "job_text": job_text,
         "mo2_exe": str(mo2_exe) if mo2_exe else None,
@@ -309,6 +364,8 @@ def fo4_run_ingame_test(
         _kill(img)
     time.sleep(2)
 
+    crash_dir = _crash_dir(cfg)
+    pre_crash = _list_crash_logs(crash_dir) if crash_dir else set()  # baseline; new == this run's CTD
     _launch_detached(mo2_exe, "moshortcut://:F4SE")
 
     # 1) wait for a REAL game (WS>200MB = not the 25MB DRM stub)
@@ -364,10 +421,51 @@ def fo4_run_ingame_test(
                 "line": line,
             }
 
+    # job provenance: the plugin echoes "[job] loaded: N resolves, M cmds ... jobid=<hex>"
+    # for the file it actually read. We require that line to match THIS run's job_id +
+    # the spec's counts, otherwise a stale/missing job (which silently degrades to the
+    # built-in DefaultJob — see "[job] no job file") would read as a false success.
+    job_loaded = re.search(r"\[job\] loaded: (\d+) resolves, (\d+) cmds", diag_text)
+    no_job_file = "[job] no job file" in diag_text
+    jobid_echoed = f"jobid={job_id}" in diag_text
+    if job_loaded:
+        job_confirmed = (
+            not no_job_file
+            and jobid_echoed
+            and int(job_loaded.group(1)) == expected_resolves
+            and int(job_loaded.group(2)) == expected_cmds
+        )
+    elif no_job_file:
+        job_confirmed = False  # ran the built-in default — definitely the wrong job
+    else:
+        # No "[job] loaded:" line at all == an OLD DLL that predates the jobid echo.
+        # Don't punish the proven pipeline before the DLL is rebuilt+redeployed: fall
+        # back to the legacy success rule with job_confirmed=None (unknown provenance).
+        job_confirmed = None
+
+    # crash detection: a real CTD makes Fallout4.exe vanish (-> exited=True) just like a
+    # clean qqq exit, so the diag/papyrus can still look complete. A fresh crash-*.log in
+    # the F4SE dir is the disambiguator — its presence forces success=False.
+    crash_log = _newest_new_crash(crash_dir, pre_crash) if crash_dir else None
+    crashed = crash_log is not None
+
     if success_pattern:
         success = appeared and bool(papyrus_matches)
     else:
         success = appeared and exited and sequence_completed
+    if job_confirmed is False:
+        success = False        # confirmed wrong/stale job — never a success
+    success = success and not crashed
+
+    crash_summary: dict[str, Any] | None = None
+    if crash_log is not None:
+        from .tools import parse_crash_log  # noqa: PLC0415 — lazy: avoid import cycle
+        parsed = parse_crash_log(crash_log.read_text(encoding="utf-8", errors="replace"))
+        crash_summary = {
+            "exception": parsed.get("exception"),
+            "probable_culprits": parsed.get("probable_culprits", [])[:3],
+            "verdict": parsed.get("verdict"),
+        }
 
     return ok({
         **plan,
@@ -384,5 +482,12 @@ def fo4_run_ingame_test(
         "plugin_timed_out": plugin_timed_out,
         "papyrus_matches": papyrus_matches[:20],
         "navmesh_verdict": navmesh_verdict,
+        "job_confirmed": job_confirmed,
+        "job_no_file": no_job_file,
+        "job_loaded_resolves": int(job_loaded.group(1)) if job_loaded else None,
+        "job_loaded_cmds": int(job_loaded.group(2)) if job_loaded else None,
+        "crashed": crashed,
+        "crash_log": str(crash_log) if crash_log else None,
+        "crash_summary": crash_summary,
         "diag_tail": diag_text.splitlines()[-25:],
     })

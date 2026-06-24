@@ -51,13 +51,26 @@ def _ck_entry_index(ini_lines: list[str]) -> int | None:
     return None
 
 
+_DEFAULT_FAILURE_MARKERS = ("ERROR", "FATAL", "failed", "Assert")
+
+
 def run_ck_via_mo2(
-    cfg: Config, ck_args: list[str], *, timeout: int = 600, poll: int = 20
+    cfg: Config,
+    ck_args: list[str],
+    *,
+    timeout: int = 600,
+    poll: int = 20,
+    expected_outputs: list[str] | None = None,
+    failure_markers: tuple[str, ...] = _DEFAULT_FAILURE_MARKERS,
 ) -> dict[str, Any]:
     """Launch CreationKit with `ck_args` through MO2 (VFS-safe) and wait (bounded) for it to exit.
 
-    Returns {launched, exited, timed_out, duration_s, ckpe_log_tail, overwrite_new}. Restores the
-    MO2 ini in a finally block. Raises if MO2/CK or the CreationKit MO2 entry is missing.
+    Returns {launched, exited, timed_out, duration_s, ckpe_log_tail, overwrite_new,
+    expected_outputs, missing_outputs, ckpe_errors, artifacts_ok}. Restores the MO2 ini in a
+    finally block. Raises if MO2/CK or the CreationKit MO2 entry is missing.
+
+    artifacts_ok is an INDEPENDENT gate ("did the op actually produce its artifact + no ckpe.log
+    errors"): "not hanging" no longer implies success. exited/timed_out keep their old semantics.
     """
     import ctypes
     import subprocess
@@ -140,25 +153,45 @@ def run_ck_via_mo2(
 
     after = {str(p) for p in overwrite.rglob("*")} if overwrite.exists() else set()
     new_files = sorted(p for p in (after - before) if Path(p).is_file())
+    overwrite_new_rel = [str(Path(p).relative_to(overwrite)) for p in new_files]
     tail = ""
+    ckpe_lines: list[str] = []
     if ckpe_log.exists():
-        tail = "\n".join(ckpe_log.read_text(errors="surrogateescape").splitlines()[-12:])
+        ckpe_lines = ckpe_log.read_text(errors="surrogateescape").splitlines()
+        tail = "\n".join(ckpe_lines[-12:])
+
+    # artifact validation: did the op produce its expected output(s), and is ckpe.log clean?
+    # missing_outputs/ckpe_errors are an independent gate — "not hanging" no longer == success.
+    missing = [
+        e for e in (expected_outputs or [])
+        if not any(e.lower() in nf.lower() for nf in overwrite_new_rel)
+    ]
+    log_errors = [
+        ln for ln in ckpe_lines
+        if any(m.lower() in ln.lower() for m in failure_markers)
+    ]
     return {
         "launched": True,
         "exited": not timed_out,
         "timed_out": timed_out,
         "duration_s": round(time.monotonic() - started, 1),
         "overwrite_dir": str(overwrite),
-        "overwrite_new": [str(Path(p).relative_to(overwrite)) for p in new_files],
+        "overwrite_new": overwrite_new_rel,
         "ckpe_log_tail": tail,
+        "expected_outputs": expected_outputs or [],
+        "missing_outputs": missing,
+        "ckpe_errors": log_errors[:20],
+        "artifacts_ok": not missing and not log_errors,
     }
 
 
 def _proc_running(name: str) -> bool:
     import subprocess
-    out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}"],
+
+    from .ingame_test import _proc_present  # exact field-0 CSV match (no substring false-positive)
+    out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}", "/FO", "CSV", "/NH"],
                          capture_output=True, text=True).stdout
-    return name.lower() in out.lower()
+    return _proc_present(out, name)
 
 
 def _kill(name: str) -> None:

@@ -158,7 +158,9 @@ def test_execute_runs_ck_per_command(tmp_path, monkeypatch):
         calls.append(list(ck_args))
         return {"launched": True, "exited": True, "timed_out": False, "duration_s": 1.0,
                 "overwrite_dir": "ow", "overwrite_new": ["CombinedObjects.esp"],
-                "ckpe_log_tail": "SAVE COMPLETE."}
+                "ckpe_log_tail": "SAVE COMPLETE.",
+                "expected_outputs": kwargs.get("expected_outputs") or [],
+                "missing_outputs": [], "ckpe_errors": [], "artifacts_ok": True}
 
     monkeypatch.setattr(ck_run, "run_ck_via_mo2", _fake)
     data = fo4_build_previs(
@@ -172,6 +174,47 @@ def test_execute_runs_ck_per_command(tmp_path, monkeypatch):
     assert all(r["exited"] and not r["timed_out"] for r in data["results"])
 
 
+def test_execute_missing_expected_output_fails(tmp_path, monkeypatch):
+    """precombined that produced NO CombinedObjects.esp -> artifacts_ok False -> ok False."""
+    from fo4_mcp import ck_run
+    install = _install_with_ck(tmp_path)
+
+    def _fake(cfg, ck_args, **kwargs):
+        expected = kwargs.get("expected_outputs") or []
+        return {"launched": True, "exited": True, "timed_out": False, "duration_s": 1.0,
+                "overwrite_dir": "ow", "overwrite_new": [],  # nothing produced
+                "ckpe_log_tail": "", "expected_outputs": expected,
+                "missing_outputs": list(expected), "ckpe_errors": [],
+                "artifacts_ok": not expected}
+
+    monkeypatch.setattr(ck_run, "run_ck_via_mo2", _fake)
+    data = fo4_build_previs(
+        _cfg(tmp_path, install=install), "MyMod.esp", step="precombined", dry_run=False
+    )["data"]
+    assert data["ok"] is False
+    assert data["results"][0]["missing_outputs"] == ["CombinedObjects.esp"]
+
+
+def test_execute_ckpe_error_fails(tmp_path, monkeypatch):
+    """A ckpe.log ERROR line -> artifacts_ok False -> ok False even when CK exited clean."""
+    from fo4_mcp import ck_run
+    install = _install_with_ck(tmp_path)
+
+    def _fake(cfg, ck_args, **kwargs):
+        return {"launched": True, "exited": True, "timed_out": False, "duration_s": 1.0,
+                "overwrite_dir": "ow", "overwrite_new": ["CombinedObjects.esp"],
+                "ckpe_log_tail": "ERROR: failed to save", "expected_outputs": [],
+                "missing_outputs": [], "ckpe_errors": ["ERROR: failed to save"],
+                "artifacts_ok": False}
+
+    monkeypatch.setattr(ck_run, "run_ck_via_mo2", _fake)
+    data = fo4_build_previs(
+        _cfg(tmp_path, install=install), "MyMod.esp", step="precombined", dry_run=False
+    )["data"]
+    assert data["ok"] is False
+    assert data["results"][0]["ckpe_errors"]
+
+
 def test_execute_propagates_ck_failure(tmp_path, monkeypatch):
     """A timed-out (hung-then-killed) CK run surfaces ok=False."""
     from fo4_mcp import ck_run
@@ -179,7 +222,9 @@ def test_execute_propagates_ck_failure(tmp_path, monkeypatch):
 
     def _fail(cfg, ck_args, **kwargs):
         return {"launched": True, "exited": False, "timed_out": True, "duration_s": 600.0,
-                "overwrite_dir": "ow", "overwrite_new": [], "ckpe_log_tail": ""}
+                "overwrite_dir": "ow", "overwrite_new": [], "ckpe_log_tail": "",
+                "expected_outputs": [], "missing_outputs": [], "ckpe_errors": [],
+                "artifacts_ok": True}
 
     monkeypatch.setattr(ck_run, "run_ck_via_mo2", _fail)
     data = fo4_build_previs(
