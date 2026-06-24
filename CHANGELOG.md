@@ -7,6 +7,37 @@ The README carries only the most recent entry under *What's new*; the full histo
 
 ## [Unreleased]
 
+### Added — Blender→game asset authoring, pure-Python (2026-06-25)
+
+- **`fo4_create_bgsm` / `fo4_inspect_bgsm`** — author and read Bethesda `.bgsm` materials field-by-field
+  without the Material Editor GUI. A single ordered schema (transcribed from the MIT MaterialLib field
+  map, every version-gate) drives both decode and encode, so the codec **round-trips byte-identical**
+  vs vanilla materials. Two fidelity wins over MaterialLib: colors kept as raw 3-floats (no 8-bit
+  quantize) and strings kept with their exact NUL bytes. `create` works in template-edit mode (decode a
+  donor, apply only the named `fields`, preserve every other byte) or defaults-author mode. Gated to
+  `staging/` / `fixtures/`; `.bak` on overwrite.
+- **`fo4_make_convex_collision` / `fo4_inspect_collision`** — generate FO4 convex collision without
+  Havok tools. A scipy `ConvexHull` of a point cloud yields the vertex + face-plane set an
+  **`hknpConvexPolytopeShape`** stores (havok-metric, game-units ÷ 69.99; coplanar facets deduped); when
+  the counts match a donor's, the floats are swapped in place (donor packfile/topology byte-preserved —
+  the robust Tier-1 path). The decoder **finds every convex body** in a `bhkPhysicsSystem` and the
+  authoring path **refuses a multi-body donor** unless a `body_index` picks which body to patch — no
+  silent half-patch that leaves the other bodies stale. (`hknpConvexPolytopeShape`, not the Skyrim-era
+  `bhkConvexVerticesShape` — disk-corrected against a real donor.)
+- **`fo4_postprocess_nif` / `fo4_validate_nif`** — repair a PyNifly FO4 export in one pass (binary-splice
+  the donor's engine-proven collision + patch the texture clamp mode) and gate a flat-MISC mesh before
+  deploy (collision integrity, clamp == 3, normals/tangents, diffuse path, Z-thickness).
+- **Record writer surface** — `fo4_create_record` gained **`WEAP`**, **world-base records**
+  (CONT/DOOR/STAT/LIGH/ALCH/INGR), **`COBJ`** crafting recipes, **outfits** (OTFT), and **workshop
+  build-menu keywords** carrying `TNAM`=9 (RecipeFilter) — without that type a custom settlement
+  category silently never appears.
+
+### Tests
+
+- collision: +6 multi-body tests (synthetic two-body packfile — find-all-headers, body-count,
+  patch-one-leaves-other-untouched, refuse-without-index, patch-chosen-and-reassemble, index-range).
+  Full suite: **550 passing, 1 skipped** (41 MCP tools).
+
 ### Added — authoring: readable notes & loot injection (2026-06-21)
 
 - **`Book` / Note record type** in `fo4_create_record`. Authors a BOOK as a readable note:

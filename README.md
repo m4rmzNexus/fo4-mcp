@@ -4,14 +4,14 @@
 > (Claude Code, Codex CLI) author Fallout 4 mods **end-to-end** — records, Papyrus scripts,
 > dialogue, voice, navmesh — and validate them in a **running game**.
 
-![license](https://img.shields.io/badge/license-MIT-blue) ![tests](https://img.shields.io/badge/tests-402%20passing-brightgreen) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![mcp](https://img.shields.io/badge/MCP-stdio-purple)
+![license](https://img.shields.io/badge/license-MIT-blue) ![tests](https://img.shields.io/badge/tests-550%20passing-brightgreen) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![mcp](https://img.shields.io/badge/MCP-stdio-purple)
 
 Fallout 4's modding stack — Mutagen, Spriggit, Caprica, F4SE / CommonLibF4, the Creation Kit,
 MO2 / LOOT, Buffout 4 / Addictol — is powerful but fragmented and largely GUI-bound. **fo4-mcp**
 puts it behind a single MCP server so an agent can plan and build a mod the way a human modder
 would, but **programmatically, diff-gated, and test-driven**.
 
-**34 MCP tools · 402 tests · MIT.**
+**41 MCP tools · 550 tests · MIT.**
 
 ---
 
@@ -19,17 +19,17 @@ would, but **programmatically, diff-gated, and test-driven**.
 
 > Rolling summary of the latest change set. Full history: [`CHANGELOG.md`](CHANGELOG.md).
 
-**Readable notes, loot injection & world-model art (2026-06-21).** `fo4_create_record` can now author
-**`Book` / Note** records (readable in-game notes — title + body, round-tripped byte-exact) and
-**`LeveledItemOverride`** records that **inject into existing vanilla leveled lists** (additive
-`DeepCopy` override, master auto-added). A new `lvli-find` CLI verb reverse-looks-up *which* leveled
-lists distribute a given item, to pick an injection point. Items can also carry a **world-model nif +
-`MaterialSwap`** (new **`MSWP`** record type) so a custom **`.dds`** shows on a shared vanilla mesh —
-the perk-magazine recipe, no new nif authored; a structural **BGSM v2 material writer** emits the
-per-item `.bgsm`. Also **fixed** non-ASCII text corruption in authored strings (`¢ — ™ ©` were becoming
-`U+FFFD`). Demo on the new surface: **Pre-War Coupons** — six unusable old-world brand coupons authored
-as notes, **each showing its own generated art in-world**, weighted by rarity, injected into the
-packaged-food loot so they turn up alongside Sugar Bombs.
+**Blender→game asset authoring, pure-Python (2026-06-25).** A new asset pipeline closes the gap from a
+Blender export to a game-ready mesh — no Material Editor, no Havok tools. **`fo4_create_bgsm` /
+`fo4_inspect_bgsm`** author Bethesda `.bgsm` materials field-by-field (clean-room codec, byte-exact
+round-trip vs vanilla — keeps colors as raw floats and strings with exact NUL bytes). **`fo4_make_convex_collision`
+/ `fo4_inspect_collision`** generate FO4 convex collision (`hknpConvexPolytopeShape`) from a point cloud
+via a scipy hull, swapped into a donor's physics block — and **detect multi-body donors**, refusing a
+silent half-patch unless you pick a `body_index`. **`fo4_postprocess_nif` / `fo4_validate_nif`** repair
+PyNifly FO4 exports (collision splice + texture-clamp fix) and gate flat-MISC meshes before deploy. The
+record writer also gained **`WEAP`, world-base records** (CONT/DOOR/STAT/LIGH/ALCH/INGR), **`COBJ`**
+crafting recipes, **outfits**, and **workshop build-menu keywords** (`TNAM`=9 recipe-filter — the fix
+that makes a custom settlement category actually appear).
 
 ---
 
@@ -43,6 +43,9 @@ packaged-food loot so they turn up alongside Sugar Bombs.
   topics appear in the in-game dialogue wheel (a bare DIAL/INFO never does).
 - **Visible armor with zero new art** — reference existing in-game ARMA addons so a custom reward
   renders without authoring a mesh.
+- **Author game-ready assets in pure Python** — `.bgsm` materials (clean-room codec, byte-exact),
+  convex collision (`hknpConvexPolytopeShape` via a scipy hull), and a PyNifly-export repair +
+  validation gate for flat-MISC meshes — no Material Editor or Havok tooling.
 - **Compile Papyrus** (Caprica) — quest / alias / magic-effect fragments, with the vanilla, F4SE, and
   Lighthouse include paths resolved.
 - **Voice & FaceGen** — bake silent-subtitled `.fuz` (LipGen + xWMAEncode + FUZE, headless) and drive
@@ -63,13 +66,14 @@ aliases, **DialogBranches**, Papyrus fragment bindings), the placed actors (addi
 and the reward armor. The dialogue surfaces in the wheel, the armor renders, and the **reward chain
 was validated in a running game** through the in-game test runner.
 
-## Capabilities (34 tools)
+## Capabilities (41 tools)
 
 | Group | Tools |
 |---|---|
 | **Core** | `fo4_get_environment` · `fo4_read_load_order` (MO2 + AppData merge) · `fo4_inspect_record` (Spriggit) · `fo4_spriggit_export` / `_import` (diff-gated) · `fo4_papyrus_build` (Caprica) · `fo4_analyze_crash_log` (native Buffout/Addictol) |
 | **Plugin / ESL** | `fo4_check_esl_eligibility` · `fo4_read_esl_flag` / `fo4_set_esl_flag` · `fo4_plan_plugin_format` · `fo4_set_master_flag` · `fo4_compact_formids` |
-| **Authoring** | `fo4_create_record` (NPC / ARMO / QUST + dialogue / scenes / fragments / glue / faction / leveled-list + **notes** + **material swaps** + cells + Story-Manager + activators + AI packages + locations + door-links + **leveled-list injection** into vanilla lists + **world-model + MaterialSwap** for custom art on a shared mesh) · `fo4_lint_npc_template` |
+| **Authoring** | `fo4_create_record` (NPC / ARMO / **WEAP** / QUST + dialogue / scenes / fragments / glue / faction / leveled-list + **notes** + **material swaps** + **world bases** [CONT/DOOR/STAT/LIGH/ALCH/INGR] + **COBJ recipes** + **outfits** + **workshop build-menu keywords** [`TNAM`=9] + cells + Story-Manager + activators + AI packages + locations + door-links + **leveled-list injection** into vanilla lists + **world-model + MaterialSwap** for custom art on a shared mesh) · `fo4_lint_npc_template` |
+| **Assets / mesh & material** | `fo4_create_bgsm` / `fo4_inspect_bgsm` (clean-room `.bgsm` material codec) · `fo4_make_convex_collision` / `fo4_inspect_collision` (scipy hull → `hknpConvexPolytopeShape`, multi-body aware) · `fo4_postprocess_nif` (PyNifly collision-splice + clamp fix) · `fo4_validate_nif` (flat-MISC render gate) |
 | **World / Story Manager** | `fo4_place_into_cell` (REFR/ACHR override, additive by default) · `fo4_check_previs_safety` (precombine/previs BLOCKING gate) · `fo4_inspect_sm_tree` |
 | **CK / voice** | `fo4_navmesh_handoff` · `fo4_voice_handoff` · `fo4_bake_voice_assets` (headless `.fuz`) · `fo4_build_facegen` · `fo4_build_seq` · `fo4_release_preflight` |
 | **Packaging / hygiene** | `fo4_generate_fomod` · `fo4_lint_engine_config` · `fo4_ba2_version_patch` · `fo4_pack_ba2` · `fo4_build_previs` · `fo4_build_lod` |
@@ -116,7 +120,7 @@ python -m venv .venv
 pip install -e ".[dev]"
 
 cp .env.example .env              # point at your FO4 / MO2 paths — all optional, auto-detected
-pytest                            # 402 tests
+pytest                            # 550 tests
 fo4-mcp                           # run the stdio MCP server
 ```
 
@@ -154,10 +158,14 @@ contagion. Mod outputs you generate are yours — the project claims no copyrigh
 MO2) tek bir **MCP server**'ının ardına koyar; böylece bir AI ajanı (Claude Code) bir modu uçtan uca —
 kayıtlar, Papyrus, diyalog, ses, navmesh — **programatik, diff-kapılı ve test-güdümlü** olarak üretebilir.
 
-- **34 MCP tool · 402 test · MIT.**
-- Creation Kit olmadan kayıt üretimi: NPC / zırh / quest (stage, objective, alias, **diyalog çarkı için
+- **41 MCP tool · 550 test · MIT.**
+- Creation Kit olmadan kayıt üretimi: NPC / zırh / silah / quest (stage, objective, alias, **diyalog çarkı için
   DialogBranch**, Papyrus fragment), hücre + yerleştirilmiş ref, fraksiyon, leveled list, Story Manager,
-  AI paket, lokasyon, kapı-link — hepsi Mutagen ile, Spriggit round-trip diff-kapısıyla.
+  AI paket, lokasyon, kapı-link, COBJ tarifleri + **atölye yapım-menüsü keyword'leri** — hepsi Mutagen ile,
+  Spriggit round-trip diff-kapısıyla.
+- **Blender→oyun asset authoring (saf Python):** `.bgsm` materyal (clean-room codec, byte-exact),
+  convex collision (`hknpConvexPolytopeShape`, scipy hull, çok-gövde farkında) ve PyNifly-export onarım +
+  doğrulama kapısı — Material Editor veya Havok aracı gerekmeden.
 - **İç-mekân navmesh** Mutagen ile üretilebilir **ve** oyun-içi yürünebilir kanıtlandı; exterior CK'ya
   checklist'le devredilir.
 - **Headless in-game test**: F4SE runner oyunu MO2 üzerinden başlatır, konsol komutlarını çözülmüş
