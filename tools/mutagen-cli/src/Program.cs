@@ -41,6 +41,52 @@ if (args.Length > 0 && args[0] == "voice-handoff")
     return RunVoiceHandoff(args);
 if (args.Length > 0 && args[0] == "exterior-navmesh-spike")
     return RunExteriorNavmeshSpike(args);
+if (args.Length > 0 && args[0] == "lvli-find")
+    return RunLvliFind(args);
+if (args.Length > 0 && args[0] == "dialogue-dump")
+    return RunDialogueDump(args);
+
+// ---- lvli-find (loot-injection target discovery): stream a plugin's LeveledItems and report
+// every LVLI whose Entries reference a target FormKey (e.g. which lists distribute SugarBombs).
+// The reverse lookup the leveledItemOverride writer needs to pick an injection point. Read-only.
+//   mutagen-cli lvli-find --plugin <path> --contains <6hex:master> [--max N]
+static int RunLvliFind(string[] argv)
+{
+    string? pluginPath = null, contains = null;
+    int max = 50;
+    for (int i = 1; i + 1 < argv.Length; i += 2)
+    {
+        switch (argv[i])
+        {
+            case "--plugin": pluginPath = argv[i + 1]; break;
+            case "--contains": contains = argv[i + 1]; break;
+            case "--max": int.TryParse(argv[i + 1], out max); break;
+        }
+    }
+    if (pluginPath is null || contains is null)
+    { Console.Error.WriteLine("lvli-find: --plugin and --contains required"); return 2; }
+    if (!FormKey.TryFactory(contains, out var targetKey))
+    { Console.Error.WriteLine($"lvli-find: bad FormKey '{contains}'"); return 2; }
+    var mod = Fallout4Mod.CreateFromBinaryOverlay(new ModPath(pluginPath), Fallout4Release.Fallout4);
+    var hits = new List<Dictionary<string, object?>>();
+    foreach (var lvli in mod.LeveledItems)
+    {
+        var n = lvli.Entries?.Count(e => e.Data?.Reference.FormKey == targetKey) ?? 0;
+        if (n > 0)
+        {
+            hits.Add(new Dictionary<string, object?>
+            {
+                ["formKey"] = lvli.FormKey.ToString(),
+                ["editorId"] = lvli.EditorID,
+                ["entryCount"] = lvli.Entries?.Count ?? 0,
+                ["targetEntries"] = n,
+            });
+            if (hits.Count >= max) break;
+        }
+    }
+    Console.Out.Write(JsonSerializer.Serialize(new { contains, count = hits.Count, lists = hits }));
+    return 0;
+}
 
 // ---- navi-dump (A-in-game RE, ground-truth): summarize the NAVI (NavigationMeshInfoMap) record's
 // first few MapInfo entries so we can compare a CK-finalized vanilla NAVI against our authored one
@@ -423,6 +469,100 @@ static int RunCellNavmeshList(string[] argv)
     catch (Exception e) { return Fail($"load error: {e.Message}"); }
 }
 
+// ---- dialogue-dump: inspect a quest's player-dialogue wiring (DLBR + DIAL + INFO) so an authored
+// quest can be diffed against a known-working vanilla one (why doesn't the wheel surface?). Read-only.
+//   no --quest: list quests that own a Player+TopLevel DialogBranch (candidate player-dialogue quests)
+//   --quest <FormID|EditorID>: full DLBR/DIAL/INFO dump for that quest
+static int RunDialogueDump(string[] argv)
+{
+    string? pluginPath = null, quest = null;
+    int max = 25;
+    for (int i = 1; i + 1 < argv.Length; i += 2)
+        switch (argv[i])
+        {
+            case "--plugin": pluginPath = argv[i + 1]; break;
+            case "--quest": quest = argv[i + 1]; break;
+            case "--max": int.TryParse(argv[i + 1], out max); break;
+            default: return Fail($"unknown arg: {argv[i]}");
+        }
+    if (string.IsNullOrWhiteSpace(pluginPath)) return Fail("usage: mutagen-cli dialogue-dump --plugin <path> [--quest <FormID>] [--max N]");
+    if (!File.Exists(pluginPath)) return Fail($"plugin not found: {pluginPath}");
+    try
+    {
+        var mod = Fallout4Mod.CreateFromBinaryOverlay(new ModPath(pluginPath), Fallout4Release.Fallout4);
+        uint? wantId = quest is null ? null : NormFormId(quest);
+        string wantEid = quest?.Trim() ?? "";
+
+        if (string.IsNullOrWhiteSpace(quest))
+        {
+            var qs = new List<object>();
+            foreach (var q in mod.Quests)
+            {
+                int playerTop = q.DialogBranches.Count(b => b.Category == DialogBranch.CategoryType.Player
+                    && b.Flags.GetValueOrDefault().HasFlag(DialogBranch.Flag.TopLevel));
+                if (playerTop == 0) continue;
+                qs.Add(new { quest = q.FormKey.ToString(), editorId = q.EditorID,
+                    branches = q.DialogBranches.Count, playerTopLevelBranches = playerTop,
+                    topics = q.DialogTopics.Count });
+                if (qs.Count >= max) break;
+            }
+            Console.Out.Write(JsonSerializer.Serialize(new { count = qs.Count, quests = qs }));
+            return 0;
+        }
+
+        IQuestGetter? qg = null;
+        foreach (var q in mod.Quests)
+            if ((wantId is uint id && (q.FormKey.ID & 0xFFFFFF) == id)
+                || (q.EditorID is { } e && string.Equals(e, wantEid, StringComparison.OrdinalIgnoreCase)))
+            { qg = q; break; }
+        if (qg is null) { Console.Out.Write(JsonSerializer.Serialize(new { found = false })); return 1; }
+
+        var branches = qg.DialogBranches.Select(b => new {
+            formKey = b.FormKey.ToString(), editorId = b.EditorID,
+            category = $"{b.Category}", flags = $"{b.Flags}",
+            startingTopic = b.StartingTopic.FormKeyNullable?.ToString(),
+        }).ToList();
+
+        var topics = new List<object>();
+        foreach (var dt in qg.DialogTopics.Take(max))
+        {
+            var infos = dt.Responses.Select(info => new {
+                prompt = info.Prompt?.String,
+                speaker = info.Speaker.FormKeyNullable?.ToString(),
+                responseCount = info.Responses.Count,
+                // P0/P3: surface the script-free stage-advance (SNAM) + Papyrus fragment (VMAD)
+                // so dialogue-driven progression is verifiable by dump alone (raw value; -1 = unused).
+                setStageOnBegin = info.SetParentQuestStage?.OnBegin,
+                setStageOnEnd = info.SetParentQuestStage?.OnEnd,
+                hasFragment = info.VirtualMachineAdapter is not null,
+                conditionCount = info.Conditions.Count,
+                conditions = info.Conditions.Select(c => new {
+                    fn = c.Data is IFunctionConditionDataGetter f ? $"{f.Function}" : null,
+                    runOn = $"{c.Data?.RunOnType}",
+                    reference = c.Data?.Reference.FormKeyNullable?.ToString(),
+                    param1 = c.Data is IFunctionConditionDataGetter f2 ? $"{f2.ParameterOneRecord.FormKeyNullable}" : null,
+                    cmp = $"{c.CompareOperator}",
+                    val = c is IConditionFloatGetter cf ? (float?)cf.ComparisonValue : null,
+                }).ToList(),
+            }).ToList();
+            topics.Add(new {
+                formKey = dt.FormKey.ToString(), editorId = dt.EditorID,
+                name = dt.Name?.String,
+                subtype = $"{dt.Subtype}", category = $"{dt.Category}", priority = dt.Priority,
+                branch = dt.Branch.FormKeyNullable?.ToString(),
+                infoCount = dt.Responses.Count, infos,
+            });
+        }
+        Console.Out.Write(JsonSerializer.Serialize(new {
+            found = true, quest = qg.FormKey.ToString(), editorId = qg.EditorID,
+            questFlags = $"{qg.Data?.Flags}",
+            branchCount = branches.Count, branches, topicCount = qg.DialogTopics.Count, topics,
+        }));
+        return 0;
+    }
+    catch (Exception e) { return Fail($"load error: {e.Message}"); }
+}
+
 // ---- navmesh-dump subcommand (A-in-game RE, ground-truth): summarize the first N populated
 // cell-child navmeshes' NVNM geometry so we can compare a CK-finalized vanilla navmesh against our
 // authored one (GridSize, count fields, CrcHash, cover/waypoint/grid presence). Read-only. ----
@@ -588,12 +728,39 @@ string recordType = hit.GetType().Name;
 try { recordType = LoquiRegistration.GetRegister(hit.GetType())?.Name ?? recordType; }
 catch { /* fall back to the runtime type name */ }
 
+// MISC detail (diag): surface the fields that govern inventory render + world pickup so a
+// coupon can be byte-compared against vanilla clutter (model path, OBND bounds, KWDA, value/weight).
+object? miscDetail = null;
+if (hit is IMiscItemGetter mi)
+{
+    var ob = mi.ObjectBounds;
+    miscDetail = new
+    {
+        name = mi.Name?.String,
+        model = mi.Model?.File.ToString(),
+        modelHasData = mi.Model is not null,
+        objectBounds = new { x1 = ob.First.X, y1 = ob.First.Y, z1 = ob.First.Z, x2 = ob.Second.X, y2 = ob.Second.Y, z2 = ob.Second.Z },
+        objectBoundsZero = ob.First.X == 0 && ob.First.Y == 0 && ob.First.Z == 0 && ob.Second.X == 0 && ob.Second.Y == 0 && ob.Second.Z == 0,
+        // PTRN — Preview Transform (TRNS). Governs how the model is framed in the Pip-Boy/Inspect
+        // inventory preview (separate from the world model). Null = engine default framing.
+        previewTransform = mi.PreviewTransform.FormKeyNullable?.ToString(),
+        value = mi.Value,
+        weight = mi.Weight,
+        keywords = mi.Keywords?.Select(k => k.FormKey.ToString()).ToArray() ?? System.Array.Empty<string>(),
+        keywordCount = mi.Keywords?.Count ?? 0,
+        iconPath = mi.Icons?.ToString(),
+        pickUpSound = mi.PickUpSound?.FormKey.ToString(),
+        putDownSound = mi.PutDownSound?.FormKey.ToString(),
+    };
+}
+
 Console.Out.Write(JsonSerializer.Serialize(new
 {
     found = true,
     formKey = hit.FormKey.ToString(),   // "<6hex>:<ModKey>" — matches Spriggit form_key
     editorId = hit.EditorID,
     recordType,                          // Loqui name, e.g. "GlobalInt" — matches Spriggit MutagenObjectType
+    misc = miscDetail,
 }));
 return 0;
 
@@ -976,7 +1143,7 @@ static int RunCreate(string[] argv)
     // W5-ext (Kerem): locate an exterior cell inside any worldspace, returning the cell + its
     // worldspace + the exact block/subblock coords the master uses (replicate them in the override
     // so no exterior grid math is needed — match the source structure verbatim).
-    static (ICellGetter cell, FormKey ws, int bx, int by, int sx, int sy)? FindExteriorCell(
+    static (ICellGetter cell, IWorldspaceGetter ws, int bx, int by, int sx, int sy)? FindExteriorCell(
         IFallout4ModGetter src, FormKey cellKey)
     {
         foreach (var w in src.Worldspaces)
@@ -984,22 +1151,39 @@ static int RunCreate(string[] argv)
                 foreach (var sub in blk.Items)
                     foreach (var c in sub.Items)
                         if (c.FormKey == cellKey)
-                            return (c, w.FormKey, blk.BlockNumberX, blk.BlockNumberY,
+                            return (c, w, blk.BlockNumberX, blk.BlockNumberY,
                                     sub.BlockNumberX, sub.BlockNumberY);
         return null;
     }
 
     // W5-ext: nest an exterior cell override under a worldspace override at the given block/subblock,
-    // creating (and caching) the worldspace + block + subblock groups as needed. An empty WRLD
-    // override keeps the master's worldspace data; only the added child cell is the edit.
-    static void PlaceExteriorCell(Fallout4Mod m, Cell ov, FormKey wsKey, int bx, int by, int sx, int sy,
+    // creating (and caching) the worldspace + block + subblock groups as needed.
+    // The WRLD override MUST carry the master's record data. FO4 resolves the winning override of a
+    // record WHOLESALE (no subrecord-level merge), so a bare `new Worldspace(wsKey)` override — which
+    // has no subrecords — wipes the worldspace's map data (MNAM), water, climate, parent and LOD =>
+    // a BROKEN Pip-Boy world map (user-reported). DeepCopy the master WRLD record but mask off the
+    // cell children (SubCells = the thousands of master exterior cells; TopCell = the persistent
+    // cell): we only attach our one added cell, not re-author the whole worldspace.
+    static void PlaceExteriorCell(Fallout4Mod m, Cell ov, IWorldspaceGetter srcWs, int bx, int by, int sx, int sy,
         Dictionary<FormKey, Worldspace> wsCache,
         Dictionary<(FormKey, int, int), WorldspaceBlock> blkCache,
         Dictionary<(FormKey, int, int, int, int), WorldspaceSubBlock> subCache)
     {
+        var wsKey = srcWs.FormKey;
         if (!wsCache.TryGetValue(wsKey, out var ws))
         {
-            ws = new Worldspace(wsKey, Fallout4Release.Fallout4);
+            ws = srcWs.DeepCopy(new Worldspace.TranslationMask(defaultOn: true)
+            {
+                SubCells = false,         // skip the master's exterior cell tree (we add only our cell)
+                TopCell = false,          // skip the worldspace persistent cell (inherited from master)
+                LargeReferences = false,  // DROP large-ref grid: copying the master's whole list bloats
+                                          // the plugin (~900KB) and risks FO4's large-reference bug
+                                          // (distant objects flicker/vanish). Stripping large refs from
+                                          // a worldspace override is established practice; the engine
+                                          // keeps the master's. The MAP data (MNAM) etc. ARE direct WRLD
+                                          // fields and STAY copied — that's what fixes the broken map.
+            });
+            ws.SubCells.Clear();    // DeepCopy with SubCells masked leaves it empty; ensure so
             m.Worldspaces.Add(ws);
             wsCache[wsKey] = ws;
         }
@@ -1160,10 +1344,10 @@ static int RunCreate(string[] argv)
     var wsSubBlocks = new Dictionary<(FormKey, int, int, int, int), WorldspaceSubBlock>();
     foreach (var r in records)
     {
-        // editorId is required for new records; a cellOverride identifies its cell by FormKey
-        // (the master's editorId carries forward via DeepCopy), so it needs none.
+        // editorId is required for new records; an override (cell / leveled-item) identifies its
+        // target by FormKey (the master's editorId carries forward via DeepCopy), so it needs none.
         if (string.IsNullOrWhiteSpace(r.EditorId)
-            && r.Type?.Trim().ToLowerInvariant() != "celloverride")
+            && r.Type?.Trim().ToLowerInvariant() is not ("celloverride" or "leveleditemoverride"))
             return Fail("record missing editorId");
         string formKey;
         switch (r.Type?.Trim().ToLowerInvariant())
@@ -1581,6 +1765,16 @@ static int RunCreate(string[] argv)
                                         info.Conditions.Add(cond);
                                     }
                                 }
+                                // P0: script-free stage advance — picking this wheel line sets the
+                                // owning quest's stage with no Papyrus (SNAM). -1 = unused.
+                                if (resp.SetParentQuestStage is { } sps && (sps.OnBegin is not null || sps.OnEnd is not null))
+                                {
+                                    info.SetParentQuestStage = new DialogSetParentQuestStage
+                                    {
+                                        OnBegin = (short)(sps.OnBegin ?? -1),
+                                        OnEnd = (short)(sps.OnEnd ?? -1),
+                                    };
+                                }
                                 topic.Responses.Add(info);
                             }
                         }
@@ -1924,6 +2118,140 @@ static int RunCreate(string[] argv)
                 formKey = mesg.FormKey.ToString();
                 break;
             }
+            case "book":
+            {
+                // BOOK authored as a readable NOTE (coupon MVP). Name = title (FULL);
+                // Text -> BookText (CNAM, the body shown when read — vanilla perk-mags leave
+                // it empty and grant a perk instead, here it carries the ad copy). Value/Weight/
+                // Keywords reuse the shared item fields. Teaches = BookTeachesNothing (set
+                // explicitly, matching vanilla) so the coupon grants no perk. Model (paper-note
+                // nif) deferred — still readable from the Pip-Boy without one. Concrete record,
+                // so AddNew (like message:1921).
+                var book = mod.Books.AddNew(r.EditorId);
+                if (r.Name is { } bn) book.Name = bn;
+                if (r.Text is { } btext) book.BookText = btext;
+                book.Teaches = new BookTeachesNothing();
+                if (r.Value is { } bval)
+                {
+                    if (bval < 0) return Fail($"book value out of range: {bval}");
+                    book.Value = (uint)bval;   // BOOK DATA value is UInt32 (Armor.Value is Int32)
+                }
+                if (r.Weight is { } bwt)
+                {
+                    if (bwt < 0) return Fail($"book weight out of range: {bwt}");
+                    book.Weight = bwt;
+                }
+                if (r.Keywords is { Count: > 0 })
+                {
+                    book.Keywords ??= new();
+                    foreach (var kw in r.Keywords)
+                    {
+                        if (!TryKey(kw, out var kk, out var e)) return Fail(e);
+                        book.Keywords.Add(new FormLink<IKeywordGetter>(kk));
+                    }
+                }
+                // Visual: world-model nif (MODL) + optional MaterialSwap (the MSWP that
+                // retextures it). The swap rides on the Model, not the Book — matching the
+                // engine (a placed model gets the swap). Without a Model the note is still
+                // readable from the Pip-Boy; with one it shows the coupon art in-world.
+                if (r.Model is { } bmdl)
+                {
+                    var m = new Model { File = bmdl };
+                    if (r.MaterialSwap is { } msw)
+                    {
+                        if (!TryKey(msw, out var mk, out var me)) return Fail(me);
+                        m.MaterialSwap.SetTo(mk);
+                    }
+                    book.Model = m;
+                }
+                formKey = book.FormKey.ToString();
+                break;
+            }
+            case "misc":
+            {
+                // MISC — pickupable clutter (coupon as a collectible item, NOT a readable BOOK).
+                // Natural partner for a money/caps-style DYNAMIC-havok world model: MISC items get
+                // picked into inventory on activate, and unlike BOOK they don't open a note UI.
+                // Name + Model (+ optional MaterialSwap) + Value/Weight/Keywords reuse the shared
+                // item fields. Concrete record -> AddNew (like book:2088).
+                var misc = mod.MiscItems.AddNew(r.EditorId);
+                if (r.Name is { } mn) misc.Name = mn;
+                if (r.Value is { } mval)
+                {
+                    if (mval < 0) return Fail($"misc value out of range: {mval}");
+                    misc.Value = mval;          // MISC DATA value is Int32 (Book.Value is UInt32)
+                }
+                if (r.Weight is { } mwt)
+                {
+                    if (mwt < 0) return Fail($"misc weight out of range: {mwt}");
+                    misc.Weight = mwt;
+                }
+                if (r.Keywords is { Count: > 0 })
+                {
+                    misc.Keywords ??= new();
+                    foreach (var kw in r.Keywords)
+                    {
+                        if (!TryKey(kw, out var kk, out var e)) return Fail(e);
+                        misc.Keywords.Add(new FormLink<IKeywordGetter>(kk));
+                    }
+                }
+                if (r.Model is { } mmdl)
+                {
+                    var m = new Model { File = mmdl };
+                    if (r.MaterialSwap is { } msw)
+                    {
+                        if (!TryKey(msw, out var mk, out var me)) return Fail(me);
+                        m.MaterialSwap.SetTo(mk);
+                    }
+                    misc.Model = m;
+                }
+                // OBND — non-zero Object Bounds. Mutagen inits ObjectBounds to all-zero, which
+                // serializes as a valid-but-degenerate box. FO4 frames the Pip-Boy inventory preview /
+                // Inspect camera from OBND, so a zero box = blank preview + dead Inspect (the coupon
+                // no-show root cause). Default = PrewarMoney's flat-card box; spec overrides per item.
+                {
+                    var ob = r.ObjectBounds ?? new short[] { -7, -3, 0, 7, 3, 4 };
+                    if (ob.Length != 6) return Fail($"objectBounds needs 6 ints [x1,y1,z1,x2,y2,z2], got {ob.Length}");
+                    misc.ObjectBounds.First = new Noggog.P3Int16(ob[0], ob[1], ob[2]);
+                    misc.ObjectBounds.Second = new Noggog.P3Int16(ob[3], ob[4], ob[5]);
+                }
+                // PTRN — Preview Transform (TRNS). Frames the model in the Pip-Boy/Inspect inventory
+                // preview, which is a SEPARATE render path from the world model. With PTRN null the
+                // engine default-frames by OBND, and a flat card lands edge-on -> blank preview even
+                // though the world model renders. Point flat items at a flat-collectible TRNS (e.g.
+                // OverdueBook's 1CF028:Fallout4.esm = a +Z-facing book, same orientation as a coupon).
+                if (r.PreviewTransform is { } pt)
+                {
+                    if (!TryKey(pt, out var ptk, out var pte)) return Fail(pte);
+                    misc.PreviewTransform.SetTo(ptk);
+                }
+                formKey = misc.FormKey.ToString();
+                break;
+            }
+            case "materialswap":
+            {
+                // MSWP: a retexture map. Each substitution swaps an ORIGINAL .bgsm
+                // (the one the nif references) for a REPLACEMENT .bgsm (ours, pointing at
+                // the coupon .dds). Paths are Data-relative, "Materials\...\x.bgsm".
+                // The Book's Model.MaterialSwap links here. Concrete record -> AddNew.
+                var mswp = mod.MaterialSwaps.AddNew(r.EditorId);
+                if (r.Substitutions is { Count: > 0 })
+                {
+                    foreach (var s in r.Substitutions)
+                    {
+                        if (string.IsNullOrWhiteSpace(s.Original) || string.IsNullOrWhiteSpace(s.Replacement))
+                            return Fail("materialswap substitution needs both original and replacement");
+                        var sub = new MaterialSubstitution
+                        {
+                            OriginalMaterial = s.Original,
+                            ReplacementMaterial = s.Replacement,
+                        };
+                        mswp.Substitutions.Add(sub);
+                    }
+                }
+                formKey = mswp.FormKey.ToString();
+                break;
+            }
             case "global":
             {
                 // GLOB: Global is ABSTRACT, so AddNew (an IMajorRecord-constrained factory
@@ -2151,12 +2479,59 @@ static int RunCreate(string[] argv)
                 // they path on the existing worldspace navmesh. Master's own refs stay in the master.
                 var ext = FindExteriorCell(srcMod, cellKey);
                 if (ext is null) return Fail($"cell {r.Cell} not found (interior or exterior) in {Path.GetFileName(r.SourcePlugin)}");
-                var (extCell, wsKey, bx, by, sx, sy) = ext.Value;
+                var (extCell, srcWs, bx, by, sx, sy) = ext.Value;
                 var extOv = extCell.DeepCopy();
                 if (r.ClearExisting ?? false) { extOv.Temporary.Clear(); extOv.Persistent.Clear(); }
                 if (!AddPlacedRefs(mod, extOv, r.PlacedObjects, r.PlacedNpcs, out var extRefErr)) return Fail(extRefErr);
-                PlaceExteriorCell(mod, extOv, wsKey, bx, by, sx, sy, wsOverrides, wsBlocks, wsSubBlocks);
+                PlaceExteriorCell(mod, extOv, srcWs, bx, by, sx, sy, wsOverrides, wsBlocks, wsSubBlocks);
                 formKey = extOv.FormKey.ToString();
+                break;
+            }
+            case "leveleditemoverride":
+            {
+                // Loot injection — override an EXISTING (master) LVLI to ADD entries (e.g. graft a
+                // coupon rarity sub-list onto a vanilla food-container list). Mirrors celloverride:
+                // load sourcePlugin, find the LVLI by FormKey, DeepCopy (FormKey preserved -> a true
+                // override, so the vanilla entries carry forward), then ADD the new entries.
+                // ADDITIVE by default — clearExisting wipes the vanilla entries (the footgun, opt-in).
+                // The master (Fallout4.esm) auto-adds on write via the preserved FormKey, exactly
+                // like celloverride. No LinkCache/LoadOrder needed.
+                if (string.IsNullOrWhiteSpace(r.SourcePlugin)) return Fail("leveledItemOverride missing sourcePlugin");
+                if (string.IsNullOrWhiteSpace(r.Target)) return Fail("leveledItemOverride missing target (LVLI FormKey)");
+                if (!TryKey(r.Target, out var tgtKey, out var tke)) return Fail(tke);
+                if (!sourceCache.TryGetValue(r.SourcePlugin, out var srcLvliMod))
+                {
+                    if (!File.Exists(r.SourcePlugin)) return Fail($"sourcePlugin not found: {r.SourcePlugin}");
+                    try { srcLvliMod = Fallout4Mod.CreateFromBinaryOverlay(new ModPath(r.SourcePlugin), Fallout4Release.Fallout4); }
+                    catch (Exception e) { return Fail($"sourcePlugin load error: {e.Message}"); }
+                    sourceCache[r.SourcePlugin] = srcLvliMod;
+                }
+                var srcLvli = srcLvliMod.LeveledItems.FirstOrDefault(x => x.FormKey == tgtKey);
+                if (srcLvli is null) return Fail($"LVLI {r.Target} not found in {Path.GetFileName(r.SourcePlugin)}");
+                var ovl = srcLvli.DeepCopy();
+                if (r.ClearExisting ?? false) ovl.Entries?.Clear();
+                if (r.Flags is { Count: > 0 })
+                {
+                    foreach (var fn in r.Flags)
+                    {
+                        if (!Enum.TryParse<LeveledItem.Flag>(fn, true, out var fl))
+                            return Fail($"bad leveledItem flag '{fn}'");
+                        ovl.Flags |= fl;
+                    }
+                }
+                if (r.Entries is { Count: > 0 })
+                {
+                    ovl.Entries ??= new();
+                    foreach (var en in r.Entries)
+                    {
+                        if (!TryKey(en.Reference, out var ek, out var e)) return Fail(e);
+                        var entry = new LeveledItemEntry { Data = new LeveledItemEntryData { Level = (short)en.Level, Count = (short)en.Count } };
+                        entry.Data!.Reference.SetTo(ek);
+                        ovl.Entries.Add(entry);
+                    }
+                }
+                mod.LeveledItems.RecordCache.Add(ovl);
+                formKey = ovl.FormKey.ToString();
                 break;
             }
             case "smqn":
@@ -2412,6 +2787,40 @@ static int RunCreate(string[] argv)
                 ["armatureCount"] = g.Armatures?.Count ?? 0,
                 ["race"] = g.Race.FormKeyNullable?.ToString(),
             };
+        // BOOK/note round-trip: the readable body (BookText) is the proof the coupon copy
+        // survived serialize->disk; value/weight/keywords confirm the item fields.
+        foreach (var g in check.Books)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["name"] = g.Name?.String,
+                ["bookText"] = g.BookText?.String,
+                ["value"] = g.Value,
+                ["weight"] = g.Weight,
+                ["keywordCount"] = g.Keywords?.Count ?? 0,
+                // Visual proof: world-model nif + the MSWP link that retextures it.
+                ["modelFile"] = g.Model?.File,
+                ["materialSwap"] = g.Model?.MaterialSwap.IsNull == false
+                    ? g.Model.MaterialSwap.FormKey.ToString() : null,
+            };
+        // MISC round-trip: model + item fields prove the clutter coupon survived serialize->disk.
+        foreach (var g in check.MiscItems)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["name"] = g.Name?.String,
+                ["value"] = g.Value,
+                ["weight"] = g.Weight,
+                ["keywordCount"] = g.Keywords?.Count ?? 0,
+                ["modelFile"] = g.Model?.File,
+                ["materialSwap"] = g.Model?.MaterialSwap.IsNull == false
+                    ? g.Model.MaterialSwap.FormKey.ToString() : null,
+                // OBND proof: a zero box (the no-show bug) must never ship green again.
+                ["objectBounds"] = new[] { g.ObjectBounds.First.X, g.ObjectBounds.First.Y, g.ObjectBounds.First.Z,
+                                           g.ObjectBounds.Second.X, g.ObjectBounds.Second.Y, g.ObjectBounds.Second.Z },
+                ["objectBoundsZero"] = g.ObjectBounds.First.X == 0 && g.ObjectBounds.First.Y == 0 && g.ObjectBounds.First.Z == 0
+                                    && g.ObjectBounds.Second.X == 0 && g.ObjectBounds.Second.Y == 0 && g.ObjectBounds.Second.Z == 0,
+                // PTRN proof: the Pip-Boy/Inspect preview transform must be set (null = blank flat-item preview).
+                ["previewTransform"] = g.PreviewTransform.FormKeyNullable?.ToString(),
+            };
         foreach (var g in check.Quests)
             back[g.FormKey.ToString()] = new Dictionary<string, object?>
             {
@@ -2460,6 +2869,18 @@ static int RunCreate(string[] argv)
             {
                 ["text"] = g.Description?.String,
                 ["name"] = g.Name?.String,
+            };
+        // MSWP material-swap: substitution count + each original->replacement pair
+        // is the proof the retexture map survived to disk.
+        foreach (var g in check.MaterialSwaps)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["substitutionCount"] = g.Substitutions.Count,
+                ["substitutions"] = g.Substitutions.Select(s => new Dictionary<string, object?>
+                {
+                    ["original"] = s.OriginalMaterial,
+                    ["replacement"] = s.ReplacementMaterial,
+                }).ToList(),
             };
         foreach (var g in check.Globals)
             back[g.FormKey.ToString()] = new Dictionary<string, object?>
@@ -2692,50 +3113,91 @@ static int RunLintNpc(string[] args)
 static int RunCellInfo(string[] argv)
 {
     string? pluginPath = null, record = null;
+    int dumpRefs = 0;   // --refs N: also sample N temporary placed refs (editorId/base/position) so a
+                        // caller can pick a real on-ground anchor inside the cell.
     for (int i = 1; i + 1 < argv.Length; i += 2)
         switch (argv[i])
         {
             case "--plugin": pluginPath = argv[i + 1]; break;
             case "--record": record = argv[i + 1]; break;
+            case "--refs": int.TryParse(argv[i + 1], out dumpRefs); break;
             default: return Fail($"unknown arg: {argv[i]}");
         }
     if (string.IsNullOrWhiteSpace(pluginPath) || string.IsNullOrWhiteSpace(record))
-        return Fail("usage: mutagen-cli cell-info --plugin <path> --record <FormID|EditorID>");
+        return Fail("usage: mutagen-cli cell-info --plugin <path> --record <FormID|EditorID> [--refs N]");
     if (!File.Exists(pluginPath)) return Fail($"plugin not found: {pluginPath}");
     uint? wantId = NormFormId(record);
     string wantEid = record.Trim();
     try
     {
         var mod = Fallout4Mod.CreateFromBinaryOverlay(new ModPath(pluginPath), Fallout4Release.Fallout4);
+        bool Match(ICellGetter c) =>
+            (wantId is uint id && (c.FormKey.ID & 0xFFFFFF) == id)
+            || (c.EditorID is { } e && string.Equals(e, wantEid, StringComparison.OrdinalIgnoreCase));
+        int EmitCell(ICellGetter c, string? wrldParent)
+        {
+            int combinedRefs = c.CombinedMeshReferences?.Count ?? 0;
+            int combinedMeshes = c.CombinedMeshes?.Count ?? 0;
+            bool hasPrevis = c.PreVisFilesTimestamp is { } pv && pv != 0;
+            bool hasPrecombine = (c.PreCombinedFilesTimestamp is { } pc && pc != 0)
+                                 || combinedRefs > 0 || combinedMeshes > 0;
+            var gp = c.Grid?.Point;  // exterior cell grid (X,Y); null for interiors
+            List<object>? refs = null;
+            if (dumpRefs > 0)
+            {
+                refs = new List<object>();
+                foreach (var p in c.Temporary)
+                {
+                    if (refs.Count >= dumpRefs) break;
+                    string? bk = null; float? px = null, py = null, pz = null;
+                    if (p is IPlacedObjectGetter po) { bk = po.Base.FormKey.ToString(); px = po.Position.X; py = po.Position.Y; pz = po.Position.Z; }
+                    else if (p is IPlacedNpcGetter pn) { bk = pn.Base.FormKey.ToString(); px = pn.Position.X; py = pn.Position.Y; pz = pn.Position.Z; }
+                    else continue;
+                    refs.Add(new { formKey = p.FormKey.ToString(), editorId = p.EditorID, baseKey = bk, x = px, y = py, z = pz });
+                }
+            }
+            Console.Out.Write(JsonSerializer.Serialize(new
+            {
+                found = true,
+                formKey = c.FormKey.ToString(),
+                editorId = c.EditorID,
+                interior = c.Flags.HasFlag(Cell.Flag.IsInteriorCell),
+                worldspaceParent = wrldParent,
+                gridX = gp?.X,
+                gridY = gp?.Y,
+                sampleRefs = refs,
+                // world bounds of this exterior cell (4096 units/cell) so callers can test whether a
+                // placed ref's XY actually falls inside the cell it was parented to.
+                worldMinX = gp is { } g1 ? g1.X * 4096 : (int?)null,
+                worldMinY = gp is { } g2 ? g2.Y * 4096 : (int?)null,
+                worldMaxX = gp is { } g3 ? (g3.X + 1) * 4096 : (int?)null,
+                worldMaxY = gp is { } g4 ? (g4.Y + 1) * 4096 : (int?)null,
+                combinedMeshes,
+                combinedMeshReferences = combinedRefs,
+                preCombinedFilesTimestamp = c.PreCombinedFilesTimestamp,
+                preVisFilesTimestamp = c.PreVisFilesTimestamp,
+                hasPrecombines = hasPrecombine,
+                hasPrevis,
+                persistentCount = c.Persistent.Count,
+                temporaryCount = c.Temporary.Count,
+            }));
+            return 0;
+        }
+        // interior cells (top-level block hierarchy)
         foreach (var b in mod.Cells)
             foreach (var s in b.SubBlocks)
                 foreach (var c in s.Cells)
-                {
-                    bool idm = wantId is uint id && (c.FormKey.ID & 0xFFFFFF) == id;
-                    bool em = c.EditorID is { } e && string.Equals(e, wantEid, StringComparison.OrdinalIgnoreCase);
-                    if (!idm && !em) continue;
-                    int combinedRefs = c.CombinedMeshReferences?.Count ?? 0;
-                    int combinedMeshes = c.CombinedMeshes?.Count ?? 0;
-                    bool hasPrevis = c.PreVisFilesTimestamp is { } pv && pv != 0;
-                    bool hasPrecombine = (c.PreCombinedFilesTimestamp is { } pc && pc != 0)
-                                         || combinedRefs > 0 || combinedMeshes > 0;
-                    Console.Out.Write(JsonSerializer.Serialize(new
-                    {
-                        found = true,
-                        formKey = c.FormKey.ToString(),
-                        editorId = c.EditorID,
-                        interior = c.Flags.HasFlag(Cell.Flag.IsInteriorCell),
-                        combinedMeshes,
-                        combinedMeshReferences = combinedRefs,
-                        preCombinedFilesTimestamp = c.PreCombinedFilesTimestamp,
-                        preVisFilesTimestamp = c.PreVisFilesTimestamp,
-                        hasPrecombines = hasPrecombine,
-                        hasPrevis,
-                        persistentCount = c.Persistent.Count,
-                        temporaryCount = c.Temporary.Count,
-                    }));
-                    return 0;
-                }
+                    if (Match(c)) return EmitCell(c, null);
+        // exterior cells (worldspace-parented) — cell-info was interior-only before; an exterior
+        // cell (e.g. RedRocketExt 00DD9F) returned {found:false} despite existing.
+        foreach (var w in mod.Worldspaces)
+        {
+            if (w.TopCell is { } tc && Match(tc)) return EmitCell(tc, w.FormKey.ToString());
+            foreach (var blk in w.SubCells)
+                foreach (var sub in blk.Items)
+                    foreach (var c in sub.Items)
+                        if (Match(c)) return EmitCell(c, w.FormKey.ToString());
+        }
     }
     catch (Exception e) { return Fail($"load error: {e.Message}"); }
     Console.Out.Write(JsonSerializer.Serialize(new { found = false }));
@@ -2854,9 +3316,15 @@ class RecordSpec
     public List<string>? Keywords { get; set; }    // FormLink list -> armo.Keywords
     public int? Value { get; set; }                // gold value (Int32, >=0)
     public float? Weight { get; set; }             // item weight (Single, >=0)
+    public short[]? ObjectBounds { get; set; }     // OBND: [x1,y1,z1,x2,y2,z2] (Int16) — MISC inventory/inspect bounds
+    public string? PreviewTransform { get; set; }  // PTRN: FormKey of a TRNS — frames model in Pip-Boy/Inspect preview
     public int? ArmorRating { get; set; }          // DNAM armor rating (UInt16, 0-65535)
     public List<string>? BipedSlots { get; set; }  // BipedObjectFlag names (OR'd) -> BipedBodyTemplate
     public List<string>? Armatures { get; set; }   // ARMA addon FormLinks -> armo.Armatures (worn mesh; reuses Race below)
+    // Book/Note visual (coupon MVP) — world-model nif + the MSWP that retextures it
+    public string? Model { get; set; }             // Book MODL: world-model nif path (meshes-relative)
+    public string? MaterialSwap { get; set; }      // Book Model.MaterialSwap: MSWP FormKey "<6hex>:<master>"
+    public List<SubstitutionSpec>? Substitutions { get; set; } // MSWP: [{original, replacement}] .bgsm paths
     // W1.5 glue records (Faz 3)
     public string? Text { get; set; }              // Message: MESG Description (body); title reuses Name
     public List<string>? Items { get; set; }       // FormList: FLST Items (FormLink list, any record)
@@ -2880,6 +3348,7 @@ class RecordSpec
     // W5 cellOverride (Faz 3) — add refs to an existing master cell (reuses PlacedObjects/PlacedNpcs)
     public string? SourcePlugin { get; set; }       // path to the plugin holding the target cell
     public string? Cell { get; set; }               // target cell FormKey "<6hex>:<master>"
+    public string? Target { get; set; }             // override target FormKey (leveledItemOverride)
     public bool? ClearExisting { get; set; }         // clear deep-copied refs (default FALSE — additive; opt in to wipe)
     // W6 Story Manager Quest Node (Faz 3) — reuses Flags for AStoryManagerNode.Flag
     public string? Parent { get; set; }             // SNAM: parent SM node FormLink
@@ -3067,6 +3536,13 @@ class LeveledEntrySpec
     public int Count { get; set; } = 1;            // LeveledEntryData.Count (Int16)
 }
 
+// MSWP one substitution: swap an original .bgsm for a replacement .bgsm (Data-relative).
+class SubstitutionSpec
+{
+    public string? Original { get; set; }          // MaterialSubstitution.OriginalMaterial (nif's .bgsm)
+    public string? Replacement { get; set; }       // MaterialSubstitution.ReplacementMaterial (our coupon .bgsm)
+}
+
 // W4: one placed reference (REFR or ACHR) nested in a cell — a base object + transform.
 class PlacedRefSpec
 {
@@ -3160,6 +3636,18 @@ class ResponseSpec
     public string? Speaker { get; set; }           // FormLink "<6hex>:<ModKey>" (IFormLinkNullable<INpc>)
     public List<LineSpec>? Lines { get; set; }     // spoken lines
     public List<ConditionSpec>? Conditions { get; set; } // INFO conditions (Faz 2.1b)
+    public SetStageSpec? SetParentQuestStage { get; set; } // P0: script-free INFO -> owning-quest stage advance (SNAM)
+}
+
+// P0 (docs/fo4-quest-dialogue-system.md): DialogResponses.SetParentQuestStage (SNAM). OnEnd=N
+// sets the OWNING quest to stage N when the line ENDS; OnBegin=N when it begins. null => -1
+// (unused). 4112 vanilla INFOs use this — it lets a dialogue-wheel pick advance the quest with
+// NO Papyrus fragment (the lowest-friction "pick line -> SetStage" primitive). A TIF VMAD
+// fragment (P2) is only needed when the line must also run arbitrary Papyrus (e.g. AddItem).
+class SetStageSpec
+{
+    public int? OnBegin { get; set; }
+    public int? OnEnd { get; set; }
 }
 
 // Faz 2.1b: a single condition -> ConditionFloat + generic FunctionConditionData.

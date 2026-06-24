@@ -22,6 +22,7 @@ from . import (
     facegen,
     ingame_test,
     lod,
+    nif_ops,
     plugin_format,
     previs,
     save_clean,
@@ -493,6 +494,30 @@ def build_server(cfg: Config | None = None, manifest: Manifest | None = None):
         or launching; dry_run=False actually runs the game (long, machine-locked;
         needs Steam logged in or FO4 dies as a ~25MB DRM stub)."""
         return _safe(lambda: ingame_test.fo4_run_ingame_test(cfg, spec, dry_run=dry_run))
+
+    # Tool N1 — PyNifly FO4 export post-processor (collision splice + texture clamp fix)
+    @mcp.tool()
+    def fo4_postprocess_nif(
+        target_nif: str, donor_nif: str, output_nif: str | None = None
+    ) -> dict[str, Any]:
+        """Repair a PyNifly-exported FO4 nif in one pass: binary-splice the donor's engine-proven
+        collision (PyNifly regenerates bhkPhysicsSystem -> crash) AND patch the BSLightingShaderProperty
+        texture clamp mode (PyNifly leaves it -1 -> blank Pip-Boy/Inspect preview). donor_nif must share
+        the target's block layout (e.g. Money_Prewar.nif). Output gated to staging/fixtures (.bak on
+        in-place). Returns the post-fix validation. Run after every PyNifly FO4 flat-MISC export."""
+        return _safe(lambda: nif_ops.fo4_postprocess_nif(cfg, target_nif, donor_nif, output_nif))
+
+    # Tool N2 — flat-MISC nif Layer-0 validation gate
+    @mcp.tool()
+    def fo4_validate_nif(
+        nif: str, donor_nif: str | None = None, textures_root: str | None = None
+    ) -> dict[str, Any]:
+        """Read-only gate for a flat-MISC (coupon/card/note) nif before deploy: collision integrity
+        (vs donor size), texture clamp mode == 3, vertex normals+tangents, diffuse texture path, and
+        mesh Z thickness (zero-thickness blanks the preview). Pass textures_root (a Data-style root, e.g.
+        the mod folder) to also confirm the diffuse .dds exists. Returns ok({ok, issues, info}); ok=False
+        means do not ship. Catches the three stacked PyNifly/flat-MISC render bugs."""
+        return _safe(lambda: nif_ops.fo4_validate_nif(cfg, nif, donor_nif, textures_root=textures_root))
 
     return mcp
 

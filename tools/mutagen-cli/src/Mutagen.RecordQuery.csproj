@@ -5,7 +5,6 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>mutagen-cli</AssemblyName>
-    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Mutagen.Bethesda.Fallout4" Version="0.53.1" />

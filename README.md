@@ -4,14 +4,32 @@
 > (Claude Code, Codex CLI) author Fallout 4 mods **end-to-end** — records, Papyrus scripts,
 > dialogue, voice, navmesh — and validate them in a **running game**.
 
-![license](https://img.shields.io/badge/license-MIT-blue) ![tests](https://img.shields.io/badge/tests-393%20passing-brightgreen) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![mcp](https://img.shields.io/badge/MCP-stdio-purple)
+![license](https://img.shields.io/badge/license-MIT-blue) ![tests](https://img.shields.io/badge/tests-402%20passing-brightgreen) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![mcp](https://img.shields.io/badge/MCP-stdio-purple)
 
 Fallout 4's modding stack — Mutagen, Spriggit, Caprica, F4SE / CommonLibF4, the Creation Kit,
 MO2 / LOOT, Buffout 4 / Addictol — is powerful but fragmented and largely GUI-bound. **fo4-mcp**
 puts it behind a single MCP server so an agent can plan and build a mod the way a human modder
 would, but **programmatically, diff-gated, and test-driven**.
 
-**34 MCP tools · 393 tests · MIT.**
+**34 MCP tools · 402 tests · MIT.**
+
+---
+
+## What's new
+
+> Rolling summary of the latest change set. Full history: [`CHANGELOG.md`](CHANGELOG.md).
+
+**Readable notes, loot injection & world-model art (2026-06-21).** `fo4_create_record` can now author
+**`Book` / Note** records (readable in-game notes — title + body, round-tripped byte-exact) and
+**`LeveledItemOverride`** records that **inject into existing vanilla leveled lists** (additive
+`DeepCopy` override, master auto-added). A new `lvli-find` CLI verb reverse-looks-up *which* leveled
+lists distribute a given item, to pick an injection point. Items can also carry a **world-model nif +
+`MaterialSwap`** (new **`MSWP`** record type) so a custom **`.dds`** shows on a shared vanilla mesh —
+the perk-magazine recipe, no new nif authored; a structural **BGSM v2 material writer** emits the
+per-item `.bgsm`. Also **fixed** non-ASCII text corruption in authored strings (`¢ — ™ ©` were becoming
+`U+FFFD`). Demo on the new surface: **Pre-War Coupons** — six unusable old-world brand coupons authored
+as notes, **each showing its own generated art in-world**, weighted by rarity, injected into the
+packaged-food loot so they turn up alongside Sugar Bombs.
 
 ---
 
@@ -51,7 +69,7 @@ was validated in a running game** through the in-game test runner.
 |---|---|
 | **Core** | `fo4_get_environment` · `fo4_read_load_order` (MO2 + AppData merge) · `fo4_inspect_record` (Spriggit) · `fo4_spriggit_export` / `_import` (diff-gated) · `fo4_papyrus_build` (Caprica) · `fo4_analyze_crash_log` (native Buffout/Addictol) |
 | **Plugin / ESL** | `fo4_check_esl_eligibility` · `fo4_read_esl_flag` / `fo4_set_esl_flag` · `fo4_plan_plugin_format` · `fo4_set_master_flag` · `fo4_compact_formids` |
-| **Authoring** | `fo4_create_record` (NPC / ARMO / QUST + dialogue / scenes / fragments / glue / faction / leveled-list + cells + Story-Manager + activators + AI packages + locations + door-links) · `fo4_lint_npc_template` |
+| **Authoring** | `fo4_create_record` (NPC / ARMO / QUST + dialogue / scenes / fragments / glue / faction / leveled-list + **notes** + **material swaps** + cells + Story-Manager + activators + AI packages + locations + door-links + **leveled-list injection** into vanilla lists + **world-model + MaterialSwap** for custom art on a shared mesh) · `fo4_lint_npc_template` |
 | **World / Story Manager** | `fo4_place_into_cell` (REFR/ACHR override, additive by default) · `fo4_check_previs_safety` (precombine/previs BLOCKING gate) · `fo4_inspect_sm_tree` |
 | **CK / voice** | `fo4_navmesh_handoff` · `fo4_voice_handoff` · `fo4_bake_voice_assets` (headless `.fuz`) · `fo4_build_facegen` · `fo4_build_seq` · `fo4_release_preflight` |
 | **Packaging / hygiene** | `fo4_generate_fomod` · `fo4_lint_engine_config` · `fo4_ba2_version_patch` · `fo4_pack_ba2` · `fo4_build_previs` · `fo4_build_lod` |
@@ -98,7 +116,7 @@ python -m venv .venv
 pip install -e ".[dev]"
 
 cp .env.example .env              # point at your FO4 / MO2 paths — all optional, auto-detected
-pytest                            # 393 tests
+pytest                            # 402 tests
 fo4-mcp                           # run the stdio MCP server
 ```
 
@@ -136,7 +154,7 @@ contagion. Mod outputs you generate are yours — the project claims no copyrigh
 MO2) tek bir **MCP server**'ının ardına koyar; böylece bir AI ajanı (Claude Code) bir modu uçtan uca —
 kayıtlar, Papyrus, diyalog, ses, navmesh — **programatik, diff-kapılı ve test-güdümlü** olarak üretebilir.
 
-- **34 MCP tool · 393 test · MIT.**
+- **34 MCP tool · 402 test · MIT.**
 - Creation Kit olmadan kayıt üretimi: NPC / zırh / quest (stage, objective, alias, **diyalog çarkı için
   DialogBranch**, Papyrus fragment), hücre + yerleştirilmiş ref, fraksiyon, leveled list, Story Manager,
   AI paket, lokasyon, kapı-link — hepsi Mutagen ile, Spriggit round-trip diff-kapısıyla.
