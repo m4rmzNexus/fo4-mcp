@@ -52,6 +52,9 @@ class Config:
     tools_dir: Path
     log_level: str
     subprocess_timeout: int
+    # Directory the compiled in-game runner plugin reads ingame-job.txt from. None = the
+    # repo-relative default <tools_dir>/commonlibf4-template (see ingame_test.py).
+    runner_dir: Path | None = None
 
 
 # ---- Auto-detect helpers ------------------------------------------------------
@@ -177,4 +180,5 @@ def load_config(env_file: Path | None = None) -> Config:
         tools_dir          = env_path("FO4_TOOLS_DIR")    or (repo_root / "tools"),
         log_level          = (env("LOG_LEVEL") or "INFO").upper(),
         subprocess_timeout = int(env("SUBPROCESS_TIMEOUT") or "120"),
+        runner_dir         = env_path("FO4_RUNNER_DIR"),
     )

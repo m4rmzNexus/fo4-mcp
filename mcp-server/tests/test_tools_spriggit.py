@@ -165,3 +165,15 @@ def test_import_diff_gate_blocks_overwrite(tmp_path, real_env):
     assert third["backup_path"] is not None
     assert Path(third["backup_path"]).exists()
     shutil.rmtree(staging, ignore_errors=True)
+
+
+def test_spriggit_env_pins_engine_cache_under_tools(tmp_path):
+    """Spriggit caches its engine under %TEMP%; a half-installed copy there breaks every
+    export ("Could not locate entry point"). With a cfg the cache lives in <tools>/runtime-tmp."""
+    from fo4_mcp.tools import _spriggit_env
+
+    env = _spriggit_env(_cfg(tmp_path))
+    expected = tmp_path / "tools" / "runtime-tmp"
+    assert env["TEMP"] == env["TMP"] == str(expected)
+    assert expected.is_dir()
+    assert "TEMP" not in _spriggit_env()   # cfg-less callers keep the inherited temp dir

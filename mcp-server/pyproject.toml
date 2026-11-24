@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "m4rmz" }]
 
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.0.0,<2",  # code targets the v1 FastMCP API (renamed in mcp 2.x)
     "numpy",
     "scipy",
     "pydantic>=2.5",

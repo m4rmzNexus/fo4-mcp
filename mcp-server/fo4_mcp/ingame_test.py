@@ -315,9 +315,11 @@ def fo4_run_ingame_test(
     appear_timeout = int(spec.get("appear_timeout_s", 240))
     run_timeout = int(spec.get("run_timeout_s", 180))
 
-    tmpl = cfg.tools_dir / _JOB_REL[0]
-    job_path = cfg.tools_dir.joinpath(*_JOB_REL)
-    diag_path = cfg.tools_dir.joinpath(*_DIAG_REL)
+    # The compiled plugin reads its job from a fixed directory. When the repo moved away from
+    # it, FO4_RUNNER_DIR (cfg.runner_dir) points at that directory; the default stays repo-relative.
+    tmpl = cfg.runner_dir or (cfg.tools_dir / _JOB_REL[0])
+    job_path = tmpl / _JOB_REL[1]
+    diag_path = tmpl / _DIAG_REL[1]
 
     mo2_exe = (cfg.mo2_instance_dir / "ModOrganizer.exe") if cfg.mo2_instance_dir else None
     papyrus = (cfg.fo4_user_docs / "Logs" / "Script" / "Papyrus.0.log") if cfg.fo4_user_docs else None

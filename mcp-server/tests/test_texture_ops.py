@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fo4_mcp.config import Config
 from fo4_mcp.errors import Fo4McpError, PathForbiddenError, ToolBinaryMissingError
-from fo4_mcp.manifest import Manifest, ToolEntry
+from fo4_mcp.manifest import Manifest, ToolEntry, parse_manifest
 from fo4_mcp.texture_ops import (
     _nearest_pow2,
     _png_dims,
@@ -26,7 +26,14 @@ from fo4_mcp.texture_ops import (
 )
 
 _REPO = Path(__file__).resolve().parents[2]
-_TEXCONV = _REPO / "tools" / "xlodgen" / "xLODGen" / "Edit Scripts" / "Texconvx64.exe"
+def _manifest_binary(slug: str, fallback: Path) -> Path:
+    """The binary tools/MANIFEST.md records for `slug` (what the server uses), else `fallback`."""
+    entry = parse_manifest(_REPO / "tools" / "MANIFEST.md").get(slug)
+    path = entry.resolved_path(_REPO) if entry else None
+    return path if path is not None and path.is_file() else fallback
+
+_TEXCONV = _manifest_binary(
+    "texconv", _REPO / "tools" / "xlodgen" / "xLODGen" / "Edit Scripts" / "Texconvx64.exe")
 
 
 def _cfg(repo_root: Path) -> Config:

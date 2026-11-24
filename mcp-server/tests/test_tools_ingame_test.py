@@ -205,6 +205,28 @@ def test_dry_run_returns_plan_without_launching(tmp_path, monkeypatch):
     assert not (tmp_path / "tools" / "commonlibf4-template" / "ingame-job.txt").exists()
 
 
+def test_runner_dir_overrides_job_and_diag_paths(tmp_path, monkeypatch):
+    """The compiled runner reads a fixed directory; FO4_RUNNER_DIR (cfg.runner_dir) points the
+    job and diag paths there instead of <tools_dir>/commonlibf4-template."""
+    from dataclasses import replace
+
+    monkeypatch.setattr(ingame_test, "_launch_detached", lambda *a, **k: None)
+    runner = tmp_path / "fixed-runner"
+    cfg = replace(_cfg(tmp_path, mo2=tmp_path / "mo2"), runner_dir=runner)
+    data = fo4_run_ingame_test(cfg, {"commands": ["qqq"]}, dry_run=True)["data"]
+    assert data["job_path"] == str(runner / "ingame-job.txt")
+    assert data["diag_log"] == str(runner / "runner-diag.log")
+
+
+def test_load_config_reads_runner_dir(tmp_path, monkeypatch):
+    from fo4_mcp.config import load_config
+
+    monkeypatch.setenv("FO4_RUNNER_DIR", str(tmp_path / "r"))
+    assert load_config(tmp_path / "absent.env").runner_dir == tmp_path / "r"
+    monkeypatch.delenv("FO4_RUNNER_DIR")
+    assert load_config(tmp_path / "absent.env").runner_dir is None
+
+
 # ---------------- simulated execute (monkeypatched) ----------------
 
 def _prep_execute(tmp_path: Path) -> tuple[Config, Path, Path]:

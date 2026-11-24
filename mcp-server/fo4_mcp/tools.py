@@ -461,7 +461,7 @@ def fo4_inspect_record(cfg: Config, manifest: Manifest, plugin: str, record_id: 
             "-p", _SPRIGGIT_PACKAGE,
             "-v", version,
         ]
-        result = run_tool(binary, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+        result = run_tool(binary, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
         if not out_dir.exists():
             raise Fo4McpError(
                 ErrorCode.SUBPROCESS_FAILED,
@@ -517,7 +517,7 @@ def _inspect_record_via_cli(
         cli,
         ["--plugin", str(plugin_path), "--record", record_id],
         timeout=cfg.subprocess_timeout,
-        env_extra=_spriggit_env(),
+        env_extra=_spriggit_env(cfg),
     )
     if result.exit_code == 2 or result.timed_out:
         raise Fo4McpError(
@@ -3108,7 +3108,7 @@ def fo4_create_record(
             cli,
             ["create", "--spec", str(spec_file), "--out", str(out), *masters_args],
             timeout=cfg.subprocess_timeout,
-            env_extra=_spriggit_env(),  # ensure the net9 runtime is discoverable
+            env_extra=_spriggit_env(cfg),  # ensure the net9 runtime is discoverable
         )
 
     if not result.ok or not out.exists():
@@ -3220,7 +3220,7 @@ def _cell_info(cfg: Config, manifest: Manifest, source: Path, cell: str) -> dict
     record = cell.split(":", 1)[0] if ":" in cell else cell
     result = run_tool(
         cli, ["cell-info", "--plugin", str(source), "--record", record],
-        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
     if not result.stdout.strip():
         raise Fo4McpError(
             ErrorCode.SUBPROCESS_FAILED, "mutagen-cli cell-info failed",
@@ -3285,7 +3285,7 @@ def _cell_navmesh_list(cfg: Config, manifest: Manifest, plugin: Path) -> list[di
             {"tool": "mutagen-cli"})
     result = run_tool(
         cli, ["cell-navmesh-list", "--plugin", str(plugin)],
-        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
     if not result.stdout.strip():
         raise Fo4McpError(
             ErrorCode.SUBPROCESS_FAILED, "mutagen-cli cell-navmesh-list failed",
@@ -3315,7 +3315,7 @@ def _dialogue_dump(
             {"tool": "mutagen-cli"})
     result = run_tool(
         cli, ["dialogue-dump", "--plugin", str(plugin), "--quest", quest],
-        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
     if not result.stdout.strip():
         raise Fo4McpError(
             ErrorCode.SUBPROCESS_FAILED, "mutagen-cli dialogue-dump failed",
@@ -3416,7 +3416,7 @@ def _voice_handoff_list(
     args = ["voice-handoff", "--plugin", str(plugin)]
     if cfg.fo4_install_dir is not None and (cfg.fo4_install_dir / "Data").is_dir():
         args += ["--masters-dir", str(cfg.fo4_install_dir / "Data")]
-    result = run_tool(cli, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+    result = run_tool(cli, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
     if not result.stdout.strip():
         raise Fo4McpError(
             ErrorCode.SUBPROCESS_FAILED, "mutagen-cli voice-handoff failed",
@@ -3745,7 +3745,7 @@ def fo4_inspect_sm_tree(
     cmd = ["sm-tree", "--plugin", str(pp)]
     if node:
         cmd += ["--record", node]
-    result = run_tool(cli, cmd, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+    result = run_tool(cli, cmd, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
     if not result.stdout.strip():
         raise Fo4McpError(
             ErrorCode.SUBPROCESS_FAILED, "mutagen-cli sm-tree failed",
@@ -3800,7 +3800,7 @@ def fo4_lint_npc_template(cfg: Config, manifest: Manifest, plugin_path: str) -> 
 
     result = run_tool(
         cli, ["lint-npc", "--plugin", str(ppath)],
-        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(),
+        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg),
     )
     if not result.ok:
         raise Fo4McpError(
@@ -4000,7 +4000,7 @@ def fo4_check_esl_eligibility(cfg: Config, manifest: Manifest, plugin: str) -> d
             "-p", _SPRIGGIT_PACKAGE,
             "-v", version,
         ]
-        result = run_tool(binary, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+        result = run_tool(binary, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
         if not out_dir.exists():
             raise Fo4McpError(
                 ErrorCode.SUBPROCESS_FAILED,
@@ -4467,18 +4467,28 @@ def _spriggit_version(manifest: Manifest, override: str | None) -> str:
     return (entry.version if entry and entry.version else "0.40.1")
 
 
-def _spriggit_env() -> dict[str, str]:
+def _spriggit_env(cfg: Config | None = None) -> dict[str, str]:
     """Ensure a net9-capable dotnet is discoverable by the Spriggit subprocess.
 
     Spriggit resolves its serialization engine via `dotnet tool install`, which
     needs the .NET 9 SDK on PATH (see research/p0/spriggit/2026-05-15-roundtrip).
     `~/.dotnet` is normally on PATH already, but we prepend it defensively so
-    the tool works even when the server is launched from a bare environment."""
+    the tool works even when the server is launched from a bare environment.
+
+    The engine is installed under %TEMP%/Spriggit/Translations, and Spriggit does
+    not recover from a half-installed copy there ("Could not locate entry
+    point"). With a cfg, TEMP/TMP point at the gitignored <tools>/runtime-tmp so
+    the engine cache is repo-local instead of depending on the user's temp dir."""
     import os
+    env: dict[str, str] = {}
     dotnet_dir = Path(os.path.expanduser("~/.dotnet"))
     if dotnet_dir.exists():
-        return {"PATH": f"{dotnet_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
-    return {}
+        env["PATH"] = f"{dotnet_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+    if cfg is not None:
+        tmp = cfg.tools_dir / "runtime-tmp"
+        tmp.mkdir(parents=True, exist_ok=True)
+        env["TEMP"] = env["TMP"] = str(tmp)
+    return env
 
 
 def fo4_spriggit_export(
@@ -4528,7 +4538,7 @@ def fo4_spriggit_export(
         "-p", _SPRIGGIT_PACKAGE,
         "-v", version,
     ]
-    result = run_tool(binary, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+    result = run_tool(binary, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
     files = sorted(str(p.relative_to(out_path)) for p in out_path.rglob("*") if p.is_file())
 
     return ok({
@@ -4598,7 +4608,7 @@ def fo4_spriggit_import(
     out_plugin.parent.mkdir(parents=True, exist_ok=True)
 
     version = _spriggit_version(manifest, package_version)
-    env = _spriggit_env()
+    env = _spriggit_env(cfg)
 
     def _deserialize(dest: Path) -> "ToolResult":
         dest.parent.mkdir(parents=True, exist_ok=True)

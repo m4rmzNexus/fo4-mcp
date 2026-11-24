@@ -14,10 +14,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fo4_mcp.ba2_pack import _naming_warning, _read_ba2_header, fo4_pack_ba2
 from fo4_mcp.config import Config
 from fo4_mcp.errors import Fo4McpError, PathForbiddenError, ToolBinaryMissingError
-from fo4_mcp.manifest import Manifest, ToolEntry
+from fo4_mcp.manifest import Manifest, ToolEntry, parse_manifest
 
 _REPO = Path(__file__).resolve().parents[2]
-_BSARCH = _REPO / "tools" / "xedit" / "BSArch64.exe"
+def _manifest_binary(slug: str, fallback: Path) -> Path:
+    """The binary tools/MANIFEST.md records for `slug` (what the server uses), else `fallback`."""
+    entry = parse_manifest(_REPO / "tools" / "MANIFEST.md").get(slug)
+    path = entry.resolved_path(_REPO) if entry else None
+    return path if path is not None and path.is_file() else fallback
+
+_BSARCH = _manifest_binary("bsarch", _REPO / "tools" / "xedit" / "BSArch64.exe")
 
 
 def _cfg(repo_root: Path) -> Config:

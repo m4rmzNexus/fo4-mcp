@@ -160,6 +160,8 @@ def test_voice_bake_rejects_out_of_repo(real_env, staging_out, tmp_path):
 def test_voice_bake_dry_run_plans_lines(real_env, staging_out):
     cfg, manifest = real_env
     require_or_skip_writer(cfg, manifest)
+    if not _toolchain_present(cfg):   # the tool checks the toolchain before planning, even dry
+        pytest.skip("LipGen/xWMAEncode toolchain not present")
     out = staging_out / "VoiceBake.esp"
     fo4_create_record(cfg, manifest, _voice_spec(), str(out))
     data = fo4_bake_voice_assets(cfg, manifest, str(out),
