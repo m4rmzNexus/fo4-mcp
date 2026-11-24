@@ -380,7 +380,7 @@ is the shipped precondition; always run it first.
 
 **Status:** research-only; build NOT started. Opens a NEW capability axis — native
 DLL / reverse-engineering tooling, parallel to the existing data/Papyrus axis (all
-current 18 tools are ESP/BA2/save/previs/config). Serves the persona's "kendi DLL
+current 41 tools are ESP/BA2/save/previs/config/asset (Session 11 count; was 18 when this note was written — and Ghidra-MCP has since been integrated, see [[ghidra-mcp-integration]] / docs/ghidra-mcp-setup.md, so "build NOT started" above is stale)). Serves the persona's "kendi DLL
 açık (CommonLibF4)" side, a real but secondary track. Evaluated by a parallel agent
 (2026-06-05).
 

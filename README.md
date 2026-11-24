@@ -4,18 +4,24 @@
 > (Claude Code, Codex CLI) author Fallout 4 mods **end-to-end** — records, Papyrus scripts,
 > dialogue, voice, navmesh — and validate them in a **running game**.
 
-![license](https://img.shields.io/badge/license-MIT-blue) ![tests](https://img.shields.io/badge/tests-550%20passing-brightgreen) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![mcp](https://img.shields.io/badge/MCP-stdio-purple)
+![license](https://img.shields.io/badge/license-MIT-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![mcp](https://img.shields.io/badge/MCP-stdio-purple)
 
 Fallout 4's modding stack — Mutagen, Spriggit, Caprica, F4SE / CommonLibF4, the Creation Kit,
 MO2 / LOOT, Buffout 4 / Addictol — is powerful but fragmented and largely GUI-bound. **fo4-mcp**
 puts it behind a single MCP server so an agent can plan and build a mod the way a human modder
 would, but **programmatically, diff-gated, and test-driven**.
 
-**41 MCP tools · 550 tests · MIT.**
+The server exposes its current tool inventory through MCP `tools/list`.
 
 ---
 
 ## What's new
+
+Use `fo4_trace_catalog_asset` with a Heybeli-format SQLite snapshot to follow a record's
+model, material and texture paths across recorded providers. Use `fo4_check_release_zip` on
+the final ZIP to check required members, FOMOD sources and loose asset references. Passing
+the catalog to the ZIP checker identifies candidate providers for files outside the package.
+See the [skill directory](skills/README.md) for the corresponding workflows.
 
 > Rolling summary of the latest change set. Full history: [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -66,10 +72,12 @@ aliases, **DialogBranches**, Papyrus fragment bindings), the placed actors (addi
 and the reward armor. The dialogue surfaces in the wheel, the armor renders, and the **reward chain
 was validated in a running game** through the in-game test runner.
 
-## Capabilities (41 tools)
+## Capabilities
 
 | Group | Tools |
 |---|---|
+| **Catalog and release artifacts** | `fo4_trace_catalog_asset` · `fo4_check_release_zip` |
+| **Geometry and textures** | `fo4_nif_build` · `fo4_encode_texture` |
 | **Core** | `fo4_get_environment` · `fo4_read_load_order` (MO2 + AppData merge) · `fo4_inspect_record` (Spriggit) · `fo4_spriggit_export` / `_import` (diff-gated) · `fo4_papyrus_build` (Caprica) · `fo4_analyze_crash_log` (native Buffout/Addictol) |
 | **Plugin / ESL** | `fo4_check_esl_eligibility` · `fo4_read_esl_flag` / `fo4_set_esl_flag` · `fo4_plan_plugin_format` · `fo4_set_master_flag` · `fo4_compact_formids` |
 | **Authoring** | `fo4_create_record` (NPC / ARMO / **WEAP** / QUST + dialogue / scenes / fragments / glue / faction / leveled-list + **notes** + **material swaps** + **world bases** [CONT/DOOR/STAT/LIGH/ALCH/INGR] + **COBJ recipes** + **outfits** + **workshop build-menu keywords** [`TNAM`=9] + cells + Story-Manager + activators + AI packages + locations + door-links + **leveled-list injection** into vanilla lists + **world-model + MaterialSwap** for custom art on a shared mesh) · `fo4_lint_npc_template` |
@@ -120,7 +128,7 @@ python -m venv .venv
 pip install -e ".[dev]"
 
 cp .env.example .env              # point at your FO4 / MO2 paths — all optional, auto-detected
-pytest                            # 550 tests
+pytest
 fo4-mcp                           # run the stdio MCP server
 ```
 
@@ -158,7 +166,7 @@ contagion. Mod outputs you generate are yours — the project claims no copyrigh
 MO2) tek bir **MCP server**'ının ardına koyar; böylece bir AI ajanı (Claude Code) bir modu uçtan uca —
 kayıtlar, Papyrus, diyalog, ses, navmesh — **programatik, diff-kapılı ve test-güdümlü** olarak üretebilir.
 
-- **41 MCP tool · 550 test · MIT.**
+- Etkin MCP araçları `tools/list` ile sorgulanabilir.
 - Creation Kit olmadan kayıt üretimi: NPC / zırh / silah / quest (stage, objective, alias, **diyalog çarkı için
   DialogBranch**, Papyrus fragment), hücre + yerleştirilmiş ref, fraksiyon, leveled list, Story Manager,
   AI paket, lokasyon, kapı-link, COBJ tarifleri + **atölye yapım-menüsü keyword'leri** — hepsi Mutagen ile,

@@ -57,12 +57,16 @@ Pipeline'ı ölçülebilir temiz bir baseline'a çek.
 
 Audit'in en somut iki defektini kapatır; ikisi de **MIT** (GPL-firewall temiz).
 
-- **B1 — BGSM/BGEM writer.** `MaterialLib` (ousnius/Material-Editor, MIT, C#) referans alınır/port edilir → yeni `fo4_create_bgsm` MCP aracı. Format version-gated (FO4 retail = v2/v20 → `Version` uint'e dallan). Alpha/gloss/fresnel/emissive/tiling tam kontrol. Audit'in `buf[0x2a]=0x00` manuel yaması artık `AlphaTestRef` (byte) + `AlphaTest` (bool) **alanı** olarak yazılır.
+- **B1 — BGSM + BGEM writer ✅ DONE (Session 11; BGEM Track 4a 2026-06-25 — golden round-trip KANITLANDI: `bgsm_ops.py` dual-signature codec _BASE+_BGSM_TAIL/_BGEM_TAIL, **283/283 vanilla BGEM + 6616/6616 BGSM byte-exact**; `fo4_create_bgsm` .bgem-suffix/template-signature ile effect-mat üretir, `fo4_inspect_bgsm` auto-detect; cross-format alan reddi; +12 test).** `MaterialLib` (ousnius/Material-Editor, MIT, C#) referans alınır/port edilir → yeni `fo4_create_bgsm` MCP aracı. Format version-gated (FO4 retail = v2/v20 → `Version` uint'e dallan). Alpha/gloss/fresnel/emissive/tiling tam kontrol. Audit'in `buf[0x2a]=0x00` manuel yaması artık `AlphaTestRef` (byte) + `AlphaTest` (bool) **alanı** olarak yazılır.
   - **Çıktı:** 6 kuponun BGSM'i **kaynaktan reproducible** üretilir → audit'in "kaynaktan rebuild'de materyal regrese eder" riski kapanır.
-- **B2 — DDS renk-uzayı.** texconv (MIT) doğru bayraklarla wrapper:
-  - diffuse: `texconv -f BC7_UNORM_SRGB -srgb -m 0 -bc x -y` (DXGI 99)
-  - normal: `texconv -f BC7_UNORM -m 0 -bc x -y` (DXGI 98, `-srgb` YOK)
-  - 6 diffuse'u sRGB'ye re-encode + texconv'u PATH'e koy.
+- **B2 — DDS renk-uzayı ✅ DONE (Session 11+, 2026-06-25 / Track 4b).** `texture_ops.py` → MCP aracı
+  `fo4_encode_texture` (server N7); texconv (DirectXTex, MIT) **GERÇEK re-encode** wrapper — gamma-correct
+  mip + pow2 resize + DXGI-format post-validation. Manifest slug `texconv` eklendi. El-test edilmiş argv:
+  `-nologo -y -f <FMT> [-srgb] -m <mips> [-w W -h H] -o <dir> <in>`.
+  - diffuse: `BC7_UNORM_SRGB` (DXGI 99); normal: `BC5_UNORM` (83); spec/mask: `BC7_UNORM` (98). `srgb`
+    bayrağı formata göre otomatik hizalanır (lineer formatta sRGB kapatılır + uyarı).
+  - Lossless `nif_ops.set_dds_diffuse_srgb` (98→99 tag-flip) fallback olarak kalır.
+  - **6 kupon diffuse'u sRGB'ye (99) re-encode edildi** (build_dist.py); 11 test (2 gerçek-texconv entegrasyon).
 - **B3 — Validator kapısı.** `fo4_validate_nif`'e `textures_root` geçen **DDS varlık + format** kapısı ekle (diffuse=99, normal=98/BC5 doğrula). Audit: validator şu an DDS başlığını parse etmiyor.
 
 **Doğrulama:** `make_coupon_assets.py` yeniden çalıştır → BGSM+DDS byte-doğru, validator yeni kapıdan geçer.

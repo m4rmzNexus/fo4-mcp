@@ -2,7 +2,25 @@
 
 **Tarih:** 2026-06-24
 **Roadmap:** `docs/blender-asset-pipeline-completion-roadmap.md` Faz C (blokör #2 keyfi geometri + #4 `fo4_nif_build` aracı yok)
-**Durum:** DESIGN + Python shim landed (autonomous). dotnet build = **GATED** (C1 GPL kararı + ağır `dotnet publish`).
+**Durum:** ✅ **BUILT + ROUND-TRIP PROVEN (2026-06-25).** nifsharp-cli inşa edildi (NiflySharp **1.3.0** —
+2.x net10-only olduğu için pinlendi; net9 toolchain), `fo4_nif_build` server.py'ye register edildi (Tool
+N8, toplam 43 tool), gerçek round-trip Money_Prewar.nif'e karşı kanıtlandı: BSTriShape mesh vertex-count'a
+**resize oldu** (4 ve 8 vert testleri), tangent+bounds yeniden hesaplandı, **collision bhkPhysicsSystem=1572B
+byte-korundu** (PyNifly Havok-regen YOK), `nif_ops.validate()` çıktıyı geri okudu. Test:
+`test_geometry_roundtrip_integration` (suite 598 pass). API tahminleri 2-pas reflection probe ile
+ground-truth'landı → semboller ilk derlemede tuttu (compile-guess döngüsü yok). In-game render = Faz E gate.
+Aşağıdaki ÖZGÜN tasarım notları (tahmini API adları) tarihsel — gerçek API §"BUILD SONUÇLARI" altında.
+
+> **BUILD SONUÇLARI (ground-truth, tasarım tahminlerinin yerini alır):** NiflySharp 1.3.0 = SWIG binding
+> over native nifly C++ (managed `nifly.dll` + native `niflycpp.dll`, namespace `nifly`, net5.0 TFM).
+> Gerçek API: `NifFile.Load(string)`/`Save(string)`, `GetShapes()→vectorNiShape`, `GetShapeNames()`,
+> `SetVertsForShape/SetUvsForShape/SetNormalsForShape/SetTangentsForShape/SetBitangentsForShape(NiShape,
+> vector…)`, **`CalcTangentsForShape(NiShape)`** (tasarımdaki `CalcTangentSpace` değil), `CalcNormalsForShape`.
+> Üçgenler+bounds SHAPE'te: `NiShape.SetTriangles(vectorTriangle)` + `UpdateBounds()`. **Sıra kritik:**
+> verts ÖNCE (BSTriShape'i resize eder, üçgenleri temizler) → SONRA triangles → uvs. SWIG container'ları
+> `new vectorVector3(IEnumerable<Vector3>)` + `.Add/.Count/.Item`. **SWIG downcast tuzağı:** GetShapes()
+> her elemanı base `NiShape` proxy döndürür → `is BSTriShape` GÜVENİLMEZ; concrete tip için
+> `NiObject.GetBlockName()` (C++ blok-tip string'i) kullan — skinned/dynamic'i bununla reddet.
 
 Bu belge, FO4 `.nif` için keyfi mesh + tangent yazan, **MIT-temiz Python orkestrasyonu + GPL-izole bir
 exe** mimarisini tarif eder. Python tarafı (`mcp-server/fo4_mcp/geometry_ops.py`) **diskte hazır ve

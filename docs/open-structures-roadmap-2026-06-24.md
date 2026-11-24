@@ -52,6 +52,11 @@ Bu bölüm, hangi yolların denenip neden kapandığını kaydeder — gelecekte
 
 ## 4. Açık yapı envanteri (önceliklendirilmiş)
 
+> **⚠️ Bu tablo audit-anına (2026-06-24) aittir — bayat.** Session 10 Faz B + Session 11
+> sonrası **OS-01/02/03/04/05/06/07/08/09/10/11/12/13/14 + OS-45 LANDED**, **OS-41 kısmen**
+> (Ghidra-MCP entegre; `.mcp.json` register + Fallout4.exe analizi gated). Güncel landed/open
+> durumu + tek ileri-backlog için → **§9 (Session-11 konsolidasyon, 2026-06-25)** [#14].
+
 | id | başlık | alan | eksik | yaklaşım | effort | risk | track | öncelik |
 |---|---|---|---|---|---|---|---|---|
 | OS-01 | WEAP base record authoring | record-core | WEAP case yok (DNAM/model/ammo) | armor branch'ini aynala | M | low | autonomous | 10 |
@@ -68,7 +73,7 @@ Bu bölüm, hangi yolların denenip neden kapandığını kaydeder — gelecekte
 | OS-12 | ck_run unit testleri + CSV parser | in-game/CK infra | ck_run sıfır doğrudan test | synthetic ini fixtures | M | low | autonomous | 7 |
 | OS-13 | GetIsAliasRef render fix + fragment readback | quest+dialogue | Spurious FormKey gösterimi | GetParameterTypes ile slot seç | S | low | autonomous | 7 |
 | OS-14 | NPC Essential/Protected + OTFT outfit | quest/NPC | npc.Flags hiç set edilmiyor | bitfield + outfit case | S | low | autonomous | 6 |
-| OS-15 | TERM/NOTE/holotape + SMEN/SMBN | record-core/world | Exposition + event-node yok | probe→author deseni | M | med | autonomous | 6 |
+| OS-15 | TERM/NOTE/holotape + SMEN/SMBN | record-core/world | ~~Exposition + event-node yok~~ **DONE** (Track 4c) | reflection-probe→author; 4 record-türü round-trip-proven | M | med | autonomous | 6 |
 | OS-16 | INFO chaining (linkTopic/StartScene) | quest+dialogue | Dallanan diyalog yok | SCEN probe önce | M | med | research | 6 |
 | OS-17 | BA2 hardening (validate+naming+version) | release | Başarı = dosya varlığı | header-read + name-pattern | M | low | autonomous | 6 |
 | OS-18 | preflight gerçek TES4 flag + BA2 | release | Yanlış-flag plugin geçiyor | plan_plugin_format compose | S | low | autonomous | 6 |
@@ -272,3 +277,91 @@ Ara dolgu olarak herhangi bir noktada: **OS-19** (stale RESUME.md re-author), **
 **Pür research / non-goal (inşa etme, watch/dokümante et):** OS-37 (re-probe watch-item), OS-38/39/40/41/43/44.
 
 Net yön: bu oturumda 10 otonom kayıt-türü + güven-sertleştirme kalemini sırayla inşa et (hepsi armor/book deseninin aynası, düşük-risk, staging-only); tüm CK/oyun-içi/credential işini tek bir W12 sit-down'da topla; FO4VR ve native-RE'yi somut talep gelene kadar dürüstçe register'da beklet.
+
+---
+
+## 9. Session-11 konsolidasyon (2026-06-25) — landed durumu + tek ileri-backlog (#14)
+
+§2/§4 tabloları **audit-anına (2026-06-24)** aittir. Session 10 Faz B + Session 11 (asset-pipeline)
+arasında register'ın büyük kısmı kapandı. Bu bölüm güncel **tek source-of-truth**'tur: yukarıdaki
+tablolarda "açık" görünen ama artık landed olan kalemleri işaretler ve kalan işi tek önceliklendirilmiş
+listede toplar.
+
+### 9.1 LANDED (artık açık DEĞİL — yukarıdaki tabloyu geçersiz kılar)
+
+| OS | başlık | nerede kapandı | not |
+|---|---|---|---|
+| OS-01 | WEAP base record | S10 Faz B | `_CREATE_SUPPORTED_TYPES` weapon |
+| OS-02 | CONT/DOOR/STAT/LIGH/ALCH/INGR | S10 Faz B | dünya temelleri + EffectSpec |
+| OS-03 | Kupon OBND/AlphaTest | S9 (refuted-as-done) | disk-kanıtlı, build yok |
+| OS-04 | INFO TIF VMAD fragment | S10 Faz B | reward-on-line plumbing |
+| OS-05 | INFO SNAM round-trip test + conftest | S10 Faz B | |
+| OS-06 | `FO4MCP_REQUIRE_WRITER` | S10 Faz B | conftest enforcement |
+| OS-07 | BGSM writer + NIF/collision validators | S9 (`nif_ops`) + S11 (`bgsm_ops`/`collision_ops`) | **BGEM hariç** — Track 4a'da ayrı |
+| OS-08 | COBJ + workshop recipe | S10 Faz B | OMOD hariç (research) |
+| OS-09 | Job-provenance guard | S10 Faz B (Python) | **C++ DLL echo rebuild gated** (gitignored main.cpp) |
+| OS-10 | Crash-log tespiti + CK artifact-gate | S10 Faz B | |
+| OS-11 | Glue fields (buttons/ranks/chanceNone) | S10 Faz B | |
+| OS-12 | ck_run unit testleri + CSV parser | S10 Faz B | ckpe.log marker calibration-TODO kaldı |
+| OS-13 | GetIsAliasRef RenderParam + readback | S10 Faz B | |
+| OS-14 | NPC actorFlags + OTFT | S10 Faz B | |
+| OS-45 | In-flight kupon/loot commit | S11 (commit'ler `a0c679f`+ öncesi) | yeşil pytest → committed |
+
+**OS-41 (Ghidra native-RE): BN-1 + BN-2 DONE (2026-06-25).** bethington/ghidra-mcp 5.14.1 + Ghidra
+12.1.2 entegre. **BN-1:** repo-kökü `.mcp.json` yazıldı (reality-checked) + MANIFEST → kalan = Claude
+Code restart. **BN-2:** Fallout4.exe (1.11.221) analiz edildi → 894M DB → REST UÇTAN-UCA PROVEN
+(`/decompile_function?address=140001294` → tam C; crash-offset→C OS-41 yeteneği kanıtlı, restart'sız).
+Pinned runbook + git-bash gotcha'lar: `docs/faz-f-ghidra-register-proposal.md` banner. Kalan gerçek
+iş: Buffout crash-offset decompile + OS-39 offset-pin (restart sonrası in-Claude). [[ghidra-mcp-integration]].
+
+### 9.2 İLERİ BACKLOG (kalan açık) — tek önceliklendirilmiş liste
+
+Tier: **P1**=sıradaki-otonom · **P2**=otonom-düşük-aciliyet · **GATED**=kullanıcı-tetikli · **RESEARCH**=upstream/aktif-iş-bekliyor.
+"Track" sütunu bu oturumun (Session 11+) çalışma planına (plan dosyası) eşler.
+
+| OS | başlık | effort | sınıf | tier | plan-track | değer |
+|---|---|---|---|---|---|---|
+| OS-15 | TERM/NOTE/holotape + SMEN/SMBN records | M | ✅ **DONE** | **P1** | 4c | son anlamlı record-türü boşluğu — 4 tür round-trip-proven |
+| OS-17 | BA2 hardening (header/naming/version gate) | M | AUTO | **P1** | 2 | "başarı = sadece dosya var" footgun |
+| OS-18 | preflight gerçek TES4 flag + BA2 compose | S | AUTO | **P1** | 2 | yanlış-flag plugin sessiz geçiyor |
+| OS-20 | manifest existence + sha256 verify | S | AUTO | **P1** | 2 | "resolved" ≠ var/doğru |
+| OS-19 | stale RESUME.md → v3 MISC re-author | S | AUTO | P2 | (Track 1 dolgu) | doc-drift temizliği |
+| OS-21 | lvli-find MCP surface + subprocess timeout audit | S | AUTO | P2 | — | CLI verb'i read-only sar |
+| OS-22 | FO4VR path-variant + ESL verdict fix | M | AUTO | P2 | — | OS-36'yı unblock; düz-FO4'e ikincil |
+| OS-23 | fo4_author_quest scaffolder | L | AUTO | P2 | — | DX; OS-04/13/14/16 landed önkoşul |
+| OS-24 | tools.py monolith böl (3949 satır) | L | AUTO | P2 | — | OS-06 sonrası en güvenli; regression-risk |
+| OS-25 | MO2/CK concurrency lock + atomic ini | M | AUTO | P2 | — | çakışan run'lar |
+| OS-26 | validate_navmesh_coverage post-CK wrapper | S | AUTO | P2 | — | CK-sonrası audit |
+| OS-16 | INFO chaining (linkTopic/StartScene) | M | RESEARCH | P2 | — | SCEN-probe önce |
+| OS-27 | Real-audio/TTS voice-bake (FUZE packer) | M | GATED | P2 | — | FUZE yarısı otonom; .lip GPU/TTS-gated |
+| OS-28 | Kupon + collision in-game eyeball | S | GATED | **P1** | E | **kanıtsız "render PASS" iddiasını kapatır** |
+| OS-29 | MO2 CK/F4SE env-check + provisioner | M | GATED | P2 | — | read-only yarısı erken |
+| OS-30 | Kerem uçtan-uca playthrough (3 göz-testi) | M | GATED | P2 | E (+4d) | marquee-demo final |
+| OS-31 | Exterior navmesh in-game pathable kanıt | M | GATED | P2 | — | OS-32 greenlight |
+| OS-32 | Exterior navmesh ürünleştir + master-reject | L | GATED | P2 | — | bugün sadece spike verb |
+| OS-33 | apply_cleaned_save copy-back | M | GATED | P2 | — | save-edit döngüsü tek-yönlü |
+| OS-34 | build_previs dry_run=False ilk smoke | S | GATED | P2 | — | CLI hiç gerçek-çalışmadı |
+| OS-35 | W12 CK-exclusive batch | L | GATED | P2 | — | gerçek CK-GUI + GPU |
+| OS-36 | FO4VR empirical gates + Tier-3 VR DLL | L | GATED | P2 | — | yüksek-risk C++ retarget; dep OS-22 |
+| OS-37 | QuestCollectionAlias re-probe | M | RESEARCH | P2 | — | **v0.53.1'de un-reject ETME**; watch-item |
+| OS-38 | PACK Data multi-input + ProcedureTree | L | RESEARCH | P2 | — | silent-AI footgun; ROI talebe gated |
+| OS-39 | Tier-3 IsPath* re-enable + STATE query | L | RESEARCH | P2 | F (F-prep) | offset-RE + C++ rebuild + live val |
+| OS-40 | Headless LOD + FormID-compaction | XL | RESEARCH | P2 | — | backend/GUI-blocked; safe-gate fallback OK |
+| OS-42 | Display-board auto-fill showcase | XL | GATED | P2 | (E sonrası) | capstone; dep OS-08✓/28/07✓ |
+| OS-43 | Multi-plugin merge / FormID-remap | L | RESEARCH | P2 | — | somut talep yok; OS-40 ile birlikte |
+| OS-44 | Exterior worldspace LAND/terrain | XL | RESEARCH | non-goal | — | bilinçli non-goal (tamlık için) |
+
+### 9.3 Bu oturumun (Session 11+) plan-track eşlemesi
+
+- **Track 1** (bu bölüm) = #14 register konsolidasyonu + gerçek-uyumu. ✅
+- **Track 2** = OS-17 + OS-18 + OS-20 (release-hardening). AUTO, sıradaki.
+- **Track 3** = kupon yayın-paketi (#13) — OS-28 in-game eyeball (Track E) hariç tamamı AUTO.
+- **Track 4** = OS-15 (4c) + BGEM (4a, OS-07 kalanı) + texconv (4b) + Kerem re-author (4d, OS-30 önhazırlık).
+- **Track E** (gated) = OS-28 + OS-30 in-game göz-testi seansı.
+- **Track C** (gated, kullanıcı açtı) = NiflySharp geometry writer (OS-07 ailesi dışı yeni eksen).
+- **Track F** (gated, kullanıcı açtı) = OS-41 register/exe + OS-39 IsPath offset-pin; **F-prep AUTO** önden.
+
+**Gerçek-uyumu notları (Track 1, 2026-06-25):** (1) "BGSM/**BGEM** writer DONE" → yalnız BGSM done,
+BGEM Track 4a'da ayrı (golden round-trip'e dek iddia edilmez). (2) Kupon **in-game render = PENDING
+(OS-28), PASS DEĞİL** — Session-9 "IN-GAME PASS" tokeni kanıtsız bulundu. (3) `V2-backlog` "18 tools"
+→ 41. (4) `TASKS.md` "Son güncelleme" başlığı → 2026-06-25.

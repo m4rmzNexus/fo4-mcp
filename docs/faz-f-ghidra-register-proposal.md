@@ -1,10 +1,27 @@
-# Faz F — Ghidra-MCP `.mcp.json` register önerisi (PROPOSAL ONLY)
+# Faz F — Ghidra-MCP `.mcp.json` register (BN-1 EXECUTED 2026-06-25)
 
-> **Bu bir öneri belgesidir — hiçbir config dosyası yazılmadı.** Sadece bu markdown
-> üretildi. Repo kökü `.mcp.json`'ı yazmak (=Claude Code MCP server kaydı) **açık
-> kullanıcı onayı + Claude Code restart** gerektirir (CLAUDE.md §3 + §1 "karar/GUI
-> gerektiren işi yapma → bekleme noktası"). Aşağıdaki içerik **donduruldu + diff
-> olarak sunuldu**; kullanıcı onayladıktan sonra yazılır.
+> **DURUM (2026-06-25): BN-1 YAZILDI.** Kullanıcı "Track F Ghidra BN-1/BN-2"yi seçti →
+> §1'deki frozen içerik makinede yeniden reality-check edildi (python yolu birebir eşleşti,
+> mcp+requests mevcut, `--lazy`/`--default-groups` geçerli flag, `--help` utf-8'le EXIT=0,
+> repo-kökü `.mcp.json` yoktu) → `C:/Modding/fo4-mcp/.mcp.json` §1 içeriğiyle **yazıldı** +
+> `tools/MANIFEST.md`'ye ghidra-mcp girdisi eklendi. **KALAN kullanıcı adımı: Claude Code
+> RESTART** (kayıt restart'sız etkin olmaz) → sonra Ghidra backend'i başlat (§6 Adım 4) →
+> BN-2 Fallout4.exe analizi (§6 Adım 5; saatler, kullanıcı-tetikli). Aşağısı tarihsel öneri
+> metnidir (içerik değişmedi).
+>
+> **BN-2 EXECUTED + UÇTAN-UCA PROVEN (2026-06-25):** `Fallout4.exe` (1.11.221) analiz edildi
+> → `tools/ghidra/projects/Fallout4.{gpr,rep}` (**894M**, `ANALYZE_EXIT_CODE=0`). Headless
+> server analiz edilmiş DB'yi açtı + REST sorgu gerçek FO4 fonksiyonları + `address=140001294`
+> ile **tam decompiled C** döndürdü (crash-offset→C PROVEN). **DOĞRU backend komutu (analiz
+> edilmiş DB'yi aç — §6 Adım 4/5'teki `--file` RE-ANALİZ ederdi, bunu KULLANMA):**
+> ```bash
+> MSYS_NO_PATHCONV=1 GHIDRA_HEADLESS_MAXMEM=16G \
+>   bash tools/ghidra/run-headless.sh \
+>   --project "C:/Modding/fo4-mcp/tools/ghidra/projects" --program /Fallout4.exe
+> ```
+> git-bash gotcha: `--project` = .gpr'yi İÇEREN dizin (`.../projects`, `.../Fallout4` DEĞİL);
+> `MSYS_NO_PATHCONV=1` yoksa `/Fallout4.exe` → `C:/Program Files/Git/Fallout4.exe` mangle olur.
+> REST endpoint adları = tool adları (`/list_functions`, `/decompile_function?address=<hex>`).
 >
 > İlgili memory: [[ghidra-mcp-integration]] · runbook: `docs/ghidra-mcp-setup.md`
 > · roadmap kalemi: TASKS.md Session 11 "Faz F (gated): `.mcp.json` register (BN-1)".
