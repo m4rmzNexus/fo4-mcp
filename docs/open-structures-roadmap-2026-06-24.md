@@ -6,23 +6,28 @@ The working tree was overwritten on 2026-11-17 from an October snapshot whose
 `Program.cs` was the older `9931e89` version. The committed HEAD C# was restored
 and rebuilt; the following never reached git and exists in no copy (git, the
 October snapshot, the old `C:\Modding` tree), so it is **lost**, not merely
-uncommitted:
+uncommitted (2026-11-24: three of the four were rewritten, see below):
 
 - **mutagen-cli writer for OS-15** (NOTE/holotape, TERM, SMEN, SMBN). The Python
   layer (`tools.py` types `note/holotape/terminal/term/smen/smbn`, validation)
-  and its tests survived; the CLI rejects these types until the C# is rewritten.
+  and its tests survived. **Rewritten 2026-11-24** from the tests' contract.
 - **ACTI Model (MODL) + ObjectBounds (OBND)** on the activator writer
-  ("Session 12c", 2026-06-26, used by the coupon showcase board).
+  ("Session 12c", 2026-06-26, used by the coupon showcase board). **Rewritten
+  2026-11-24.**
 - **nifsharp-cli** (`tools/nifsharp-cli/src`, NiflySharp geometry writer behind
-  `fo4_nif_build`): neither source nor binary exists.
+  `fo4_nif_build`): neither source nor binary existed (`src/` was not in the
+  gitignore allowlist). **Rewritten 2026-11-24** from
+  `docs/faz-c-geometry-writer-design.md`; `src/` is now allowlisted.
 - **In-game runner plugin source** (`tools/commonlibf4-template/src/main.cpp`):
   only compiled DLLs remain (in MO2 mods). Its job/diag paths are compiled in as
   `C:\Modding\fo4-mcp\tools\commonlibf4-template\`; `FO4_RUNNER_DIR` points
-  the Python side there.
+  the Python side there. **Still lost** — not rewritten.
 
-Tests that need the lost writer code are marked `xfail(strict=True)` in
-`mcp-server/tests/test_tools_create_record.py`, so restoring the code turns them
-into failures that ask for the marker to be removed.
+The three tests that were `xfail(strict=True)` while the writer was missing
+(`test_create_os15_records_roundtrip`, `test_create_holotape_sound_and_terminal_link`,
+`test_create_activator_with_model`) pass again and the marker is gone;
+`test_geometry_roundtrip_integration` runs against a `Money_Prewar.nif` template
+read from `Fallout4 - Meshes.ba2` into `staging/coupon-mod/_template/`.
 
 ## 1. Yönetici özeti
 
@@ -97,7 +102,7 @@ Bu bölüm, hangi yolların denenip neden kapandığını kaydeder — gelecekte
 | OS-12 | ck_run unit testleri + CSV parser | in-game/CK infra | ck_run sıfır doğrudan test | synthetic ini fixtures | M | low | autonomous | 7 |
 | OS-13 | GetIsAliasRef render fix + fragment readback | quest+dialogue | Spurious FormKey gösterimi | GetParameterTypes ile slot seç | S | low | autonomous | 7 |
 | OS-14 | NPC Essential/Protected + OTFT outfit | quest/NPC | npc.Flags hiç set edilmiyor | bitfield + outfit case | S | low | autonomous | 6 |
-| OS-15 | TERM/NOTE/holotape + SMEN/SMBN | record-core/world | ~~Exposition + event-node yok~~ **DONE (Track 4c) → C# KAYIP 2026-11, bkz Lost code** | reflection-probe→author; 4 record-türü round-trip-proven | M | med | autonomous | 6 |
+| OS-15 | TERM/NOTE/holotape + SMEN/SMBN | record-core/world | ~~Exposition + event-node yok~~ **DONE (Track 4c); C# 2026-11'de kayboldu, 2026-11-24 yeniden yazıldı** | reflection-probe→author; 4 record-türü round-trip-proven | M | med | autonomous | 6 |
 | OS-16 | INFO chaining (linkTopic/StartScene) | quest+dialogue | Dallanan diyalog yok | SCEN probe önce | M | med | research | 6 |
 | OS-17 | BA2 hardening (validate+naming+version) | release | Başarı = dosya varlığı | header-read + name-pattern | M | low | autonomous | 6 |
 | OS-18 | preflight gerçek TES4 flag + BA2 | release | Yanlış-flag plugin geçiyor | plan_plugin_format compose | S | low | autonomous | 6 |
@@ -345,7 +350,7 @@ Tier: **P1**=sıradaki-otonom · **P2**=otonom-düşük-aciliyet · **GATED**=ku
 
 | OS | başlık | effort | sınıf | tier | plan-track | değer |
 |---|---|---|---|---|---|---|
-| OS-15 | TERM/NOTE/holotape + SMEN/SMBN records | M | ⚠ **C# KAYIP** (Python+test var) | **P1** | 4c | son anlamlı record-türü boşluğu — 4 tür round-trip-proven |
+| OS-15 | TERM/NOTE/holotape + SMEN/SMBN records | M | DONE (C# 2026-11-24 yeniden yazıldı) | **P1** | 4c | son anlamlı record-türü boşluğu — 4 tür round-trip-proven |
 | OS-17 | BA2 hardening (header/naming/version gate) | M | AUTO | **P1** | 2 | "başarı = sadece dosya var" footgun |
 | OS-18 | preflight gerçek TES4 flag + BA2 compose | S | AUTO | **P1** | 2 | yanlış-flag plugin sessiz geçiyor |
 | OS-20 | manifest existence + sha256 verify | S | AUTO | **P1** | 2 | "resolved" ≠ var/doğru |

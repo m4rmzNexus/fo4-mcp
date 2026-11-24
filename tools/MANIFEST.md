@@ -2,10 +2,11 @@
 
 > **Bu makinenin durumu (2026-11-24 doğrulandı).** Aşağıdaki envanter tarihsel bir kurulum
 > listesidir; her girdinin `status:` satırı bu makinedeki gerçeği söyler. `tools/` altında
-> yalnız Spriggit CLI 0.40.1, Champollion 1.3.2, mutagen-cli (2026-11-24 HEAD kaynağından
-> yeniden derlendi) ve `tools/dotnet` .NET SDK 9.0.319 var. BSArch, xEdit ve texconv
+> yalnız Spriggit CLI 0.40.1, Champollion 1.3.2, Caprica 0.3.0 (2026-11-24 resmi release'ten,
+> hash doğrulandı), mutagen-cli (2026-11-24 kaynaktan derlendi; OS-15 + ACTI Model/OBND writer
+> yeniden yazıldı) ve `tools/dotnet` .NET SDK 9.0.319 var. BSArch, xEdit ve texconv
 > `C:/Modding/MO2-FO4/tools/xEdit-4.1.5f/` altındaki kopyadan salt-okur çalıştırılır (BSArch
-> sha256 bu manifestteki değerle eşleşti). Eksik araçlar İNDİRİLMEDİ; indirme kararı Kerem'in.
+> sha256 bu manifestteki değerle eşleşti). Diğer eksik araçlar indirilmedi.
 > Ekim araştırma notu: `REFERENCE_TOOLS.md` (tarihsel; içindeki D:/private-kernel yolları eski).
 
 Otomatik indirilen FO4 modlama araç binary'leri. `fo4-mcp` server subprocess çağrılarında bu dosyayı path source-of-truth olarak kullanır.
@@ -14,7 +15,9 @@ Otomatik indirilen FO4 modlama araç binary'leri. `fo4-mcp` server subprocess ç
 **Runtime tespit (2026-11-24):** `D:/SteamLibrary/steamapps/common/Fallout 4/Fallout4.exe` = 1.11.240.0 (AE); F4SE 0.7.9 oyun klasöründe kurulu
 **Creation Kit:** CreationKit.exe = 1.11.246.0 — oyun klasöründe (araçlar bunu kullanır) + Steam'in kayıtlı CK-only klasörü `C:/Program Files (x86)/Steam/steamapps/common/Fallout 4/`
 **.NET:** repo-yerel SDK 9.0.319 (`tools/dotnet/`); sistemde SDK 9.0.321 + runtime 8.0.34/9.0.23 (`C:/Program Files/dotnet`). `~/.dotnet`'te SDK yok. Spriggit net9 runtime ister.
-**Vanilla Papyrus source:** `tools/papyrus-source/Base/` (Base.zip extract)
+**Vanilla Papyrus source:** `tools/papyrus-source/Base/` (Base.zip extract). Yeniden açılırsa:
+`TestKevinActivationScript.psc` ilk satırı boşlukla (` Scriptname ...`) başlıyor ve Caprica 0.3.0 import'u
+"Unable to find script name" ile durduruyor → baştaki boşluğu sil (2026-11-24 bu kopyada silindi).
 
 ## Konvansiyon
 
@@ -195,11 +198,11 @@ version: 0.53.1
 source: custom (tools/mutagen-cli/src/ — Mutagen.Bethesda.Fallout4 0.53.1 NuGet wrap)
 asset: built from source via dotnet publish (net9.0, framework-dependent, win-x64)
 binary_path: tools/mutagen-cli/mutagen-cli.exe
-status: kurulu — 2026-11-24 HEAD kaynağından derlendi, hash'ler aşağıda
+status: kurulu — 2026-11-24 derlendi (HEAD kaynağı + yeniden yazılan OS-15 ve ACTI Model/OBND writer), hash'ler aşağıda
 license: GPL-3.0
-downloaded: 2026-06-05 (built; rebuilt 2026-11-24 from HEAD be784e1 source with tools/dotnet SDK 9.0.319; rebuilt 2026-06-06 with `create` subcommand + Faz 1.1 NPC fields + Faz 1.2 rich ARMO fields + Faz 2 Quest skeleton + Faz 2.1a quest dialogue + Faz 2.1b INFO conditions + Faz 2.1c quest aliases + Faz 2.1d Papyrus VMAD binding + Faz 2.1e SCEN scenes + Faz 2.1f quest stage fragments + Faz 2.1g quest alias fragments + Faz 2.2a QUST stage QSDT/RunOnStart fix + Faz 3/W1 condition run-on slots + Faz 3/W1.5 glue records GLOB/MESG/KYWD/FLST + Faz 3/W3.5 Faction FACT + Faz 3/W3a UseTemplateActors RE-probe gate + Faz 3/W3b NPC full-field [voice/combatStyle/defaultOutfit/attackRace/skin + AI enums + keywords/inventory/perks] + Faz 3/W3c NPC template-chain [defaultTemplate + useTemplateActors bitfield] + Faz 3/W3d+W3e leveled lists [LeveledNpc/LeveledItem: entries{reference,level,count} + calc flags] + Faz 3/W3f lint-npc verb [streams NPC template/FaceGen flags for fo4_lint_npc_template] + Faz 3/W2 quest objective QSTA targets [objective flags + targets{aliasId, flags, keyword, conditions}] + Faz 3/A-in-game interior navmesh IN-GAME VALIDATED [AddNavmesh now also authors the flattened cover-grid `[triCount:u32][indices]` + GridMaxDistance + a NAVI override of 000FF1:Fallout4.esm; an NPC pathfinds on it, adversarial-proven 2026-06-21 → interior navmesh reclassified CK-gated → Mutagen-authorable] + navmesh-dump/navi-dump RE ground-truth verbs + Faz 3/W6.7 quest location-alias + event-fill [alias type=location → QuestLocationAlias{specificLocation/referenceAliasLocation/externalAliasLocation}, fromEvent → FindMatchingRefFromEvent on ref+location aliases, externalAliasQuest/externalAliasId → External link; collection alias BLOCKED — Mutagen v0.53.1 can't round-trip multi-member QuestCollectionAlias, writer rejects] + Faz 3/W12 cell-navmesh-list verb [enumerates every cell — interior block hierarchy + worldspace sub-cells — with per-cell {interior, worldspaceParent, navmeshCount, hasNavi} for fo4_navmesh_handoff] + Faz 3/W7-Data package location data-input [`dataLocation` → PackageDataLocation; slot index resolved by NAME against the live template via --masters-dir] + package-dump verb [PACK Data input map ground-truth] + Faz 3/W9 voice-handoff verb [enumerates every DIAL→INFO→line with subtitle + speaker + resolved voice type + canonical .fuz path for fo4_voice_handoff] + W12-RE exterior-navmesh verbs [navmesh-dump --exterior/--record dumps worldspace NAVM geometry + cross-cell edge-links; exterior-navmesh-spike round-trips a NEW isolated WRLD + exterior cell + WorldspaceNavmeshParent NAVM + worldspace-parent 000FF1 NAVI override — disk-proves isolated exterior navmesh is Mutagen-authorable] + Coupon-MVP [Book/Note record type {name→title, text→BookText, value/weight/keywords, Teaches=BookTeachesNothing} + LeveledItemOverride record type {DeepCopy a master LVLI by FormKey, additive entry-add, clearExisting opt-in — loot injection into vanilla leveled lists} + lvli-find verb {reverse-lookup which LVLIs reference a target FormKey} + FIX: removed InvariantGlobalization so 1252 chars ¢—™© no longer corrupt to U+FFFD in authored strings] + Coupon-Visual [Book Model+MaterialSwap {book MODL = world-model nif path + Model.MaterialSwap = MSWP FormLink — the swap rides on the Model, not the Book} + MaterialSwap (MSWP) record type {substitutions[]{original→replacement} .bgsm retexture map} + read-back proof for both {book modelFile/materialSwap, MSWP substitutionCount/pairs}; drives Pre-War Coupons world-model art via the Grognak-comic recipe — DN101Note.nif + per-coupon MSWP → coupon .bgsm → coupon .dds] + MISC record type {pickupable clutter — name/value[Int32]/weight/keywords/Model+MaterialSwap; money/caps analog for a coupon as collectible item, not a readable Book} + MISC ObjectBounds (OBND) {non-zero [x1,y1,z1,x2,y2,z2] — FO4 frames the inventory preview/Inspect camera from OBND; zero box = blank preview} + MISC PreviewTransform (PTRN) {FormLink to a TRNS — the Pip-Boy/Inspect 3D preview is framed by a Transform SEPARATE from the world Model; missing PTRN = a flat item default-frames edge-on → blank preview; e.g. OverdueBook's 1CF028}; read-back proof for objectBounds/objectBoundsZero/previewTransform + Open-structures build-now 2026-06-24 [WEAP weapon {DNAM stats + ammo/keywords/attach-slots/Model+MSWP} + world bases CONT/DOOR/STAT/LIGH/ALCH/INGR {Name/Model+MSWP/Keywords/Flags/Value/Weight; ALCH+INGR effects[]{MGEF, magnitude, area, duration}} + COBJ constructibleobject {createdObject + workbenchKeyword + components/categories/conditions} + OTFT outfit {worn-item list} + NPC actorFlags {Essential/Protected/... bitfield} + MESG menuButtons + FACT Ranks{gendered title}+VendorValues + LVLN/LVLI chanceNone {0-100 loot-tune} + INFO TIF VMAD fragment {per-INFO fragment→VirtualMachineAdapter + FormKey pin} + dialogue-dump verb + RenderParam {GetParameterTypes-bucketed param render — fixes alias-slot rendering as Null}])
-sha256: 0890103D0F570EB3BA8C61DC08D2C9D477E4C785942FECA71B3CC44BF997ED8F
-managed_dll_sha256: 53541F6F88BFF1B3C2C1827FAB0889D425CF738586E3411D50A5887E9473B7B2
+downloaded: 2026-06-05 (built; rebuilt 2026-11-24 from HEAD be784e1 source with tools/dotnet SDK 9.0.319, then again with the rewritten OS-15 NOTE/TERM/SMEN/SMBN + ACTI Model/OBND writer; rebuilt 2026-06-06 with `create` subcommand + Faz 1.1 NPC fields + Faz 1.2 rich ARMO fields + Faz 2 Quest skeleton + Faz 2.1a quest dialogue + Faz 2.1b INFO conditions + Faz 2.1c quest aliases + Faz 2.1d Papyrus VMAD binding + Faz 2.1e SCEN scenes + Faz 2.1f quest stage fragments + Faz 2.1g quest alias fragments + Faz 2.2a QUST stage QSDT/RunOnStart fix + Faz 3/W1 condition run-on slots + Faz 3/W1.5 glue records GLOB/MESG/KYWD/FLST + Faz 3/W3.5 Faction FACT + Faz 3/W3a UseTemplateActors RE-probe gate + Faz 3/W3b NPC full-field [voice/combatStyle/defaultOutfit/attackRace/skin + AI enums + keywords/inventory/perks] + Faz 3/W3c NPC template-chain [defaultTemplate + useTemplateActors bitfield] + Faz 3/W3d+W3e leveled lists [LeveledNpc/LeveledItem: entries{reference,level,count} + calc flags] + Faz 3/W3f lint-npc verb [streams NPC template/FaceGen flags for fo4_lint_npc_template] + Faz 3/W2 quest objective QSTA targets [objective flags + targets{aliasId, flags, keyword, conditions}] + Faz 3/A-in-game interior navmesh IN-GAME VALIDATED [AddNavmesh now also authors the flattened cover-grid `[triCount:u32][indices]` + GridMaxDistance + a NAVI override of 000FF1:Fallout4.esm; an NPC pathfinds on it, adversarial-proven 2026-06-21 → interior navmesh reclassified CK-gated → Mutagen-authorable] + navmesh-dump/navi-dump RE ground-truth verbs + Faz 3/W6.7 quest location-alias + event-fill [alias type=location → QuestLocationAlias{specificLocation/referenceAliasLocation/externalAliasLocation}, fromEvent → FindMatchingRefFromEvent on ref+location aliases, externalAliasQuest/externalAliasId → External link; collection alias BLOCKED — Mutagen v0.53.1 can't round-trip multi-member QuestCollectionAlias, writer rejects] + Faz 3/W12 cell-navmesh-list verb [enumerates every cell — interior block hierarchy + worldspace sub-cells — with per-cell {interior, worldspaceParent, navmeshCount, hasNavi} for fo4_navmesh_handoff] + Faz 3/W7-Data package location data-input [`dataLocation` → PackageDataLocation; slot index resolved by NAME against the live template via --masters-dir] + package-dump verb [PACK Data input map ground-truth] + Faz 3/W9 voice-handoff verb [enumerates every DIAL→INFO→line with subtitle + speaker + resolved voice type + canonical .fuz path for fo4_voice_handoff] + W12-RE exterior-navmesh verbs [navmesh-dump --exterior/--record dumps worldspace NAVM geometry + cross-cell edge-links; exterior-navmesh-spike round-trips a NEW isolated WRLD + exterior cell + WorldspaceNavmeshParent NAVM + worldspace-parent 000FF1 NAVI override — disk-proves isolated exterior navmesh is Mutagen-authorable] + Coupon-MVP [Book/Note record type {name→title, text→BookText, value/weight/keywords, Teaches=BookTeachesNothing} + LeveledItemOverride record type {DeepCopy a master LVLI by FormKey, additive entry-add, clearExisting opt-in — loot injection into vanilla leveled lists} + lvli-find verb {reverse-lookup which LVLIs reference a target FormKey} + FIX: removed InvariantGlobalization so 1252 chars ¢—™© no longer corrupt to U+FFFD in authored strings] + Coupon-Visual [Book Model+MaterialSwap {book MODL = world-model nif path + Model.MaterialSwap = MSWP FormLink — the swap rides on the Model, not the Book} + MaterialSwap (MSWP) record type {substitutions[]{original→replacement} .bgsm retexture map} + read-back proof for both {book modelFile/materialSwap, MSWP substitutionCount/pairs}; drives Pre-War Coupons world-model art via the Grognak-comic recipe — DN101Note.nif + per-coupon MSWP → coupon .bgsm → coupon .dds] + MISC record type {pickupable clutter — name/value[Int32]/weight/keywords/Model+MaterialSwap; money/caps analog for a coupon as collectible item, not a readable Book} + MISC ObjectBounds (OBND) {non-zero [x1,y1,z1,x2,y2,z2] — FO4 frames the inventory preview/Inspect camera from OBND; zero box = blank preview} + MISC PreviewTransform (PTRN) {FormLink to a TRNS — the Pip-Boy/Inspect 3D preview is framed by a Transform SEPARATE from the world Model; missing PTRN = a flat item default-frames edge-on → blank preview; e.g. OverdueBook's 1CF028}; read-back proof for objectBounds/objectBoundsZero/previewTransform + Open-structures build-now 2026-06-24 [WEAP weapon {DNAM stats + ammo/keywords/attach-slots/Model+MSWP} + world bases CONT/DOOR/STAT/LIGH/ALCH/INGR {Name/Model+MSWP/Keywords/Flags/Value/Weight; ALCH+INGR effects[]{MGEF, magnitude, area, duration}} + COBJ constructibleobject {createdObject + workbenchKeyword + components/categories/conditions} + OTFT outfit {worn-item list} + NPC actorFlags {Essential/Protected/... bitfield} + MESG menuButtons + FACT Ranks{gendered title}+VendorValues + LVLN/LVLI chanceNone {0-100 loot-tune} + INFO TIF VMAD fragment {per-INFO fragment→VirtualMachineAdapter + FormKey pin} + dialogue-dump verb + RenderParam {GetParameterTypes-bucketed param render — fixes alias-slot rendering as Null}])
+sha256: 40E8165EFAB62BB26066DD24062BF9A46F1FB50D5B2426A79249A3AF15AAB665
+managed_dll_sha256: 98B9F16F41392967CF093808D3C2DF84392ADCE1A0338E9AC8369568AA203E81
 notes: |
   Three subcommands, one exe:
   (1) record-query backend for fo4_inspect_record (V2-backlog #2).
@@ -332,11 +335,12 @@ version: v0.3.0
 source: https://github.com/Orvid/Caprica/releases/tag/v0.3.0
 asset: Caprica.v0.3.0.7z
 binary_path: tools/caprica/Caprica.exe
-status: kurulu değil — fo4_papyrus_build çalışmaz
+status: kurulu — tools/caprica (2026-11-24 resmi GitHub release'ten indirildi, arşiv hash'i eşleşti)
 license: MIT
-downloaded: 2026-05-10
-extracted: 2026-05-10
-sha256: 0037E54CF3A1021E976278D9A637E8AE541AAF9EBEB8D274B6C2CFE32F4EE559
+downloaded: 2026-05-10 (yeniden: 2026-11-24)
+extracted: 2026-05-10 (yeniden: 2026-11-24)
+sha256_asset: 0037E54CF3A1021E976278D9A637E8AE541AAF9EBEB8D274B6C2CFE32F4EE559
+sha256: 389FEF19A803C36342FA7F733C96B6E27EF10FCD0B171AF10427E29CBE153EC6
 size_mb: 0.4
 exe_size_mb: 1.1
 notes: |
@@ -455,14 +459,25 @@ notes: |
 
 ```yaml
 name: nifsharp-cli
-version: TBD
-source: tools/nifsharp-cli/src (docs/faz-c-geometry-writer-design.md)
-asset: built from source via dotnet publish
+version: NiflySharp 1.3.0 (2.x net10-only → pinned)
+source: custom (tools/nifsharp-cli/src/ — NiflySharp GPL-3.0 wrap; docs/faz-c-geometry-writer-design.md)
+asset: built from source via dotnet publish (net9.0, framework-dependent, win-x64)
 binary_path: tools/nifsharp-cli/nifsharp-cli.exe
-status: KAYIP — ne kaynak ne binary bu makinede ya da Ekim anlık görüntüsünde var (src gitignore izin listesinde değildi). fo4_nif_build çalışmaz.
+status: kurulu — 2026-11-24 yeniden yazıldı ve derlendi (özgün kaynak kayıptı; src artık gitignore izin listesinde)
 license: GPL-3.0 (NiflySharp) — subprocess-only
+downloaded: 2026-11-24 (NiflySharp 1.3.0 nuget.org; tools/dotnet SDK 9.0.319)
+sha256: 5EF5AE1C7CD6C855AB81D080F3800616D78AEA435AD63A48C5E3E0714E096047
+managed_dll_sha256: BAECFCDFDCFF63C10B868485D64249CCD0FF3EA7DC70BDF14232D33576AE8F6C
 notes: |
-  fo4_nif_build (geometry_ops.py) manifest.get("nifsharp-cli") ile çözer. Yeniden yazmak ayrı bir iş.
+  One verb: build-trishape --in <template.nif> --mesh <mesh.json> --out <out.nif>
+  [--shape <index|name>] [--flip-bitangent]. Template-edit ONE plain BSTriShape (block type checked
+  via GetBlockName — skinned/sub-indexed/dynamic rejected); normals derived if absent, tangent space
+  via CalcTangentsForShape (or bitangent = normal x tangent when tangents are given), bounds updated;
+  every other block left as loaded (Money_Prewar bhkPhysicsSystem 1572 B survives). stdout = one JSON
+  {out, shape, shapeIndex, numVerts, numTris, vertexFlags, boundsCenter, boundsRadius,
+  tangentsCalculated, flipBitangent}; exit 0 ok / 2 error. fo4_nif_build (geometry_ops.py) resolves it
+  via manifest.get("nifsharp-cli"). Rebuild (from tools/nifsharp-cli, DOTNET_CLI_HOME=tools/dotnet-home):
+  ../dotnet/dotnet.exe publish src/NifSharp.Build.csproj -c Release -r win-x64 --self-contained false -o .
 ```
 
 ---
