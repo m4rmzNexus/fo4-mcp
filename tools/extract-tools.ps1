@@ -5,7 +5,7 @@
 # 7Z   -> tar -xf (windows bsdtar libarchive 7z support).
 #
 # Kullanim:
-#   pwsh -File C:\Modding\tools\extract-tools.ps1
+#   pwsh -File <repo>\tools\extract-tools.ps1
 #
 # Cikti:
 #   tools/<name>/<extracted files>

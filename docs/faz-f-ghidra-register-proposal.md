@@ -1,5 +1,9 @@
 # Faz F — Ghidra-MCP `.mcp.json` register (BN-1 EXECUTED 2026-06-25)
 
+> **Durum 2026-11-24 (tarihsel belge):** bu makinede `tools/ghidra-mcp`, `tools/ghidra` ve `tools/jdk`
+> YOK; repo `C:\GameDev\mods\fallout\fo4-mcp`'ye taşındı. `.mcp.json` artık yalnız fo4-mcp sunucusunu
+> kaydeder (gitignore'lu, makineye özel). Aşağıdaki yollar kurulumun yapıldığı eski konumu anlatır.
+
 > **DURUM (2026-06-25): BN-1 YAZILDI.** Kullanıcı "Track F Ghidra BN-1/BN-2"yi seçti →
 > §1'deki frozen içerik makinede yeniden reality-check edildi (python yolu birebir eşleşti,
 > mcp+requests mevcut, `--lazy`/`--default-groups` geçerli flag, `--help` utf-8'le EXIT=0,

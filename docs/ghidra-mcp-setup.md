@@ -1,5 +1,9 @@
 # Ghidra-MCP — kurulum + çalıştırma + context-dostu kullanım
 
+> **Durum 2026-11-24 (tarihsel belge):** bu makinede `tools/ghidra-mcp`, `tools/ghidra` ve `tools/jdk`
+> YOK; repo `C:\GameDev\mods\fallout\fo4-mcp`'ye taşındı. `.mcp.json` artık yalnız fo4-mcp sunucusunu
+> kaydeder (gitignore'lu, makineye özel). Aşağıdaki yollar kurulumun yapıldığı eski konumu anlatır.
+
 Native-RE ekseni (roadmap **OS-41/OS-39**). Ghidra'yı bir MCP server'ı arkasına koyup
 ajanın (Claude Code) FO4 binary'lerini decompile/analiz etmesini sağlar. Lazy tool-loading
 ile 251 araç context'i boğmaz. **Neden** + faz planı: `~/.claude/plans/iridescent-rolling-parrot.md`.

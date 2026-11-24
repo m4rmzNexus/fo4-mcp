@@ -54,7 +54,7 @@ revert to BOOK).
    flat card). (Read-back already reports `objectBoundsZero`.)
 2. **Python passthrough** — `mcp-server/fo4_mcp/tools.py` MISC/BOOK normalizer: accept+forward
    `objectBounds` (len-6 Int16), default for model-bearing MISC.
-3. **Rebuild** — `dotnet publish … -o C:/Modding/fo4-mcp/tools/mutagen-cli` (verify dll sha256 changed).
+3. **Rebuild** — `dotnet publish … -o C:/GameDev/mods/fallout/fo4-mcp/tools/mutagen-cli` (verify dll sha256 changed).
 4. **Spec** — `staging/coupon-mod/prewar-coupons-spec.json`: add `objectBounds` + `value:8` to all 6.
 5. **BGSM AlphaTest=0** — patch the 6 deployed `coupon_*.bgsm` (byte 0x2a → 0); fix the template going
    forward (P1-7). Opaque card, zero downside.

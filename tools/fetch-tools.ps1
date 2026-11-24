@@ -4,7 +4,7 @@
 # Auth gerektirenler (Nexus, Bethesda.net) MANUAL-DOWNLOADS.txt'de.
 #
 # Kullanım:
-#   pwsh -File C:\Modding\tools\fetch-tools.ps1
+#   pwsh -File <repo>\tools\fetch-tools.ps1
 #
 # Çıktı:
 #   tools/<name>/<asset>  -> indirilen dosya

@@ -11,7 +11,7 @@ Phase 0, research'in geri kalanını şekillendiren foundational kararlar içeri
 ## Karar 1 — Artifact repo'sunun konumu
 
 **Durum:** ÇÖZÜLDÜ
-**Cevap:** `C:\Modding\`
+**Cevap:** `C:\Modding\` (2026-11'den beri repo `C:\GameDev\mods\fallout\fo4-mcp\`; aşağıdaki `C:\Modding\<x>` yolları bugün `<repo>\<x>`)
 
 **Rasyonel:**
 Steam doğrulamalı oyun klasörü (`C:/Program Files (x86)/Steam/steamapps/common/Fallout 4/`) artifact repo'su olamaz çünkü:

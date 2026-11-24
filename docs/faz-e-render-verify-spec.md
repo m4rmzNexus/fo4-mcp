@@ -222,7 +222,7 @@ std::string CaptureFrame(const Job& j) {
     // (b) TERCİH EDİLEN: DXGI/D3D11 backbuffer grab; PNG'yi DOĞRUDAN staging/'e yaz.
     //     read-only-root readback'i tamamen atlar, frame'i tam kontrol eder.
     //     Windows SDK + CommonLibF4 (cpp-toolchain-tier3, GPL YOK) ile derlenir.
-    std::string out = R"(C:\Modding\fo4-mcp\staging\render-verify\)" + j.jobId + ".png";
+    std::string out = R"(C:\GameDev\mods\fallout\fo4-mcp\staging\render-verify\)" + j.jobId + ".png";
     GrabBackbufferToPng(out, j.shotRegion);   // yeni src/capture.cpp/.h, mevcut xmake.lua
     return out;
 }
@@ -400,7 +400,7 @@ Beklenen envelope (orchestrator döner; `render_verdict` agent doldurur):
 ```jsonc
 {
   "ok": true,
-  "screenshot_path": "C:\\Modding\\fo4-mcp\\staging\\render-verify\\<jobid>.png",
+  "screenshot_path": "C:\\GameDev\\mods\\fallout\\fo4-mcp\\staging\\render-verify\\<jobid>.png",
   "shot_confirmed": true,
   "render_prescreen": { "variance": 84.3, "non_bg_fraction": 0.21, "blank": false, "region": [620,180,680,720] },
   "render_verdict": null,          // ← parent agent Read(screenshot_path) sonrası PASS|FAIL
