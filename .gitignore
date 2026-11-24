@@ -13,6 +13,7 @@ logs/
 .claude/.credentials.json
 # skill discovery junctions -> repo skills/ (local convenience, not committed; see skills/README.md)
 .claude/skills/
+.agents/skills/fo4-*/
 
 # IDE / editor state
 .vs/
@@ -32,6 +33,11 @@ obj/
 __pycache__/
 *.pyc
 .pytest_cache/
+.venv/
+*.egg-info/
+
+# Machine-local MCP client registration (absolute interpreter path)
+.mcp.json
 node_modules/
 dist/
 build/
