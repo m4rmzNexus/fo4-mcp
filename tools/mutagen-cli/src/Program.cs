@@ -2958,15 +2958,185 @@ static int RunCreate(string[] argv)
                 formKey = node.FormKey.ToString();
                 break;
             }
+            case "note":
+            case "holotape":
+            {
+                // OS-15 NOTE/Holotape (rewritten 2026-11-24 after the original was lost). Item fields
+                // reuse the shared ones; the payload is the Data union picked by holotapeType:
+                // sound -> HolotapeSound.Sound (SNDR), voice -> HolotapeVoice.Scene (SCEN),
+                // program -> HolotapeProgram.File (.swf), terminal -> HolotapeTerminal.Terminal (TERM).
+                var holo = mod.Holotapes.AddNew(r.EditorId);
+                if (r.Name is { } n) holo.Name = n;
+                if (r.Model is { } hmdl)
+                {
+                    var m = new Model { File = hmdl };
+                    if (r.MaterialSwap is { } msw)
+                    { if (!TryKey(msw, out var mk, out var me)) return Fail(me); m.MaterialSwap.SetTo(mk); }
+                    holo.Model = m;
+                }
+                if (r.Value is { } hv)
+                {
+                    if (hv < 0) return Fail($"holotape value must be >= 0, got {hv}");
+                    holo.Value = (uint)hv;
+                }
+                if (r.Weight is { } hw)
+                {
+                    if (hw < 0) return Fail($"holotape weight must be >= 0, got {hw}");
+                    holo.Weight = hw;
+                }
+                if (r.ObjectBounds is { } hob)
+                {
+                    if (hob.Length != 6) return Fail($"objectBounds needs 6 ints [x1,y1,z1,x2,y2,z2], got {hob.Length}");
+                    holo.ObjectBounds = new ObjectBounds   // nullable on Holotape (optional OBND)
+                    {
+                        First = new Noggog.P3Int16(hob[0], hob[1], hob[2]),
+                        Second = new Noggog.P3Int16(hob[3], hob[4], hob[5]),
+                    };
+                }
+                switch ((r.HolotapeType ?? "").Trim().ToLowerInvariant())
+                {
+                    case "sound":
+                    {
+                        if (string.IsNullOrWhiteSpace(r.Sound)) return Fail("holotapeType=sound needs 'sound' (SNDR FormKey)");
+                        if (!TryKey(r.Sound, out var sk, out var se)) return Fail(se);
+                        var d = new HolotapeSound(); d.Sound.SetTo(sk); holo.Data = d;
+                        break;
+                    }
+                    case "voice":
+                    {
+                        if (string.IsNullOrWhiteSpace(r.Scene)) return Fail("holotapeType=voice needs 'scene' (SCEN FormKey)");
+                        if (!TryKey(r.Scene, out var sk, out var se)) return Fail(se);
+                        var d = new HolotapeVoice(); d.Scene.SetTo(sk); holo.Data = d;
+                        break;
+                    }
+                    case "program":
+                        if (string.IsNullOrWhiteSpace(r.ProgramFile)) return Fail("holotapeType=program needs 'programFile' (.swf path)");
+                        holo.Data = new HolotapeProgram { File = r.ProgramFile };
+                        break;
+                    case "terminal":
+                    {
+                        if (string.IsNullOrWhiteSpace(r.TerminalLink)) return Fail("holotapeType=terminal needs 'terminalLink' (TERM FormKey)");
+                        if (!TryKey(r.TerminalLink, out var tk, out var te)) return Fail(te);
+                        var d = new HolotapeTerminal(); d.Terminal.SetTo(tk); holo.Data = d;
+                        break;
+                    }
+                    default:
+                        return Fail($"holotape needs holotapeType sound|voice|program|terminal, got '{r.HolotapeType}'");
+                }
+                formKey = holo.FormKey.ToString();
+                break;
+            }
+            case "terminal":
+            case "term":
+            {
+                // OS-15 TERM — readable info terminal: header banner + WelcomeText (spec `text`) +
+                // static body paragraphs. Submenu navigation (MenuItems) is not authored.
+                var term = mod.Terminals.AddNew(r.EditorId);
+                if (r.Name is { } n) term.Name = n;
+                if (r.HeaderText is { } hdr) term.HeaderText = hdr;
+                if (r.Text is { } wtxt) term.WelcomeText = wtxt;
+                if (r.Model is { } tmdl)
+                {
+                    var m = new Model { File = tmdl };
+                    if (r.MaterialSwap is { } msw)
+                    { if (!TryKey(msw, out var mk, out var me)) return Fail(me); m.MaterialSwap.SetTo(mk); }
+                    term.Model = m;
+                }
+                if (r.BodyTexts is { Count: > 0 })
+                {
+                    term.BodyTexts ??= new();
+                    foreach (var bt in r.BodyTexts) term.BodyTexts.Add(new TerminalBodyText { Text = bt });
+                }
+                if (r.ObjectBounds is { } tob)
+                {
+                    if (tob.Length != 6) return Fail($"objectBounds needs 6 ints [x1,y1,z1,x2,y2,z2], got {tob.Length}");
+                    term.ObjectBounds.First = new Noggog.P3Int16(tob[0], tob[1], tob[2]);
+                    term.ObjectBounds.Second = new Noggog.P3Int16(tob[3], tob[4], tob[5]);
+                }
+                formKey = term.FormKey.ToString();
+                break;
+            }
+            case "smen":
+            {
+                // OS-15 Story Manager Event Node — a new event listener (Type = what it listens for).
+                var ev = mod.StoryManagerEventNodes.AddNew(r.EditorId);
+                if (string.IsNullOrWhiteSpace(r.EventType)) return Fail("smen needs eventType (StoryManagerEventNode.Types name)");
+                if (!Enum.TryParse<StoryManagerEventNode.Types>(r.EventType.Trim(), true, out var et))
+                    return Fail($"bad smen eventType '{r.EventType}'");
+                ev.Type = et;
+                if (!string.IsNullOrWhiteSpace(r.Parent))
+                { if (!TryKey(r.Parent, out var k, out var e)) return Fail(e); ev.Parent.SetTo(k); }
+                if (!string.IsNullOrWhiteSpace(r.PreviousSibling))
+                { if (!TryKey(r.PreviousSibling, out var k, out var e)) return Fail(e); ev.PreviousSibling.SetTo(k); }
+                if (r.Flags is { Count: > 0 })
+                    foreach (var fn in r.Flags)
+                    {
+                        if (!Enum.TryParse<AStoryManagerNode.Flag>(fn, true, out var fl))
+                            return Fail($"bad smen flag '{fn}' (Random|WarnIfNoChildQuestStarted)");
+                        ev.Flags = (ev.Flags ?? 0) | fl;
+                    }
+                if (r.MaxConcurrentQuests is { } emc)
+                {
+                    if (emc < 0) return Fail($"maxConcurrentQuests out of range: {emc}");
+                    ev.MaxConcurrentQuests = (uint)emc;
+                }
+                if (r.Conditions is { Count: > 0 })
+                    foreach (var cs in r.Conditions)
+                    { if (!BuildCondition(cs, out var cond, out var ce)) return Fail(ce); ev.Conditions.Add(cond); }
+                formKey = ev.FormKey.ToString();
+                break;
+            }
+            case "smbn":
+            {
+                // OS-15 Story Manager Branch Node — flag/condition grouping node, no event.
+                var br = mod.StoryManagerBranchNodes.AddNew(r.EditorId);
+                if (!string.IsNullOrWhiteSpace(r.Parent))
+                { if (!TryKey(r.Parent, out var k, out var e)) return Fail(e); br.Parent.SetTo(k); }
+                if (!string.IsNullOrWhiteSpace(r.PreviousSibling))
+                { if (!TryKey(r.PreviousSibling, out var k, out var e)) return Fail(e); br.PreviousSibling.SetTo(k); }
+                if (r.Flags is { Count: > 0 })
+                    foreach (var fn in r.Flags)
+                    {
+                        if (!Enum.TryParse<AStoryManagerNode.Flag>(fn, true, out var fl))
+                            return Fail($"bad smbn flag '{fn}' (Random|WarnIfNoChildQuestStarted)");
+                        br.Flags = (br.Flags ?? 0) | fl;
+                    }
+                if (r.MaxConcurrentQuests is { } bmc)
+                {
+                    if (bmc < 0) return Fail($"maxConcurrentQuests out of range: {bmc}");
+                    br.MaxConcurrentQuests = (uint)bmc;
+                }
+                if (r.Conditions is { Count: > 0 })
+                    foreach (var cs in r.Conditions)
+                    { if (!BuildCondition(cs, out var cond, out var ce)) return Fail(ce); br.Conditions.Add(cond); }
+                formKey = br.FormKey.ToString();
+                break;
+            }
             case "activator":
             {
                 // W6.5 — ACTI base record (script-bound trigger / interactable). name + keywords +
                 // VMAD control-script binding (W6.5-gap, 2026-06-21): `scripts[]` attaches a compiled
                 // Papyrus control script (by .psc class name) with typed properties — the .pex is
                 // compiled separately (fo4_papyrus_build / Caprica), this writes the VMAD metadata
-                // (Version 6 / ObjectFormat 2, what CK writes). Model mesh deferred.
+                // (Version 6 / ObjectFormat 2, what CK writes).
+                // Model(+MSWP) + OBND (2026-06-26, rewritten 2026-11-24 after the original was lost):
+                // a scripted workshop ACTI (coupon showcase board) needs a world mesh + placement
+                // bounds — same shape as STAT below.
                 var acti = mod.Activators.AddNew(r.EditorId);
                 if (r.Name is { } n) acti.Name = n;
+                if (r.Model is { } amdl)
+                {
+                    var m = new Model { File = amdl };
+                    if (r.MaterialSwap is { } msw)
+                    { if (!TryKey(msw, out var mk, out var me)) return Fail(me); m.MaterialSwap.SetTo(mk); }
+                    acti.Model = m;
+                }
+                if (r.ObjectBounds is { } aob)
+                {
+                    if (aob.Length != 6) return Fail($"objectBounds needs 6 ints [x1,y1,z1,x2,y2,z2], got {aob.Length}");
+                    acti.ObjectBounds.First = new Noggog.P3Int16(aob[0], aob[1], aob[2]);
+                    acti.ObjectBounds.Second = new Noggog.P3Int16(aob[3], aob[4], aob[5]);
+                }
                 if (r.Keywords is { Count: > 0 })
                 {
                     acti.Keywords ??= new();
@@ -3588,6 +3758,58 @@ static int RunCreate(string[] argv)
                 ["questCount"] = g.Quests.Count,
                 ["quests"] = g.Quests.Select(sq => sq.Quest.FormKeyNullable?.ToString()).ToList(),
             };
+        // OS-15 Holotape: the Data-union discriminator + its payload (null for the other variants).
+        foreach (var g in check.Holotapes)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["name"] = g.Name?.String,
+                ["holotapeType"] = g.Data switch
+                {
+                    IHolotapeSoundGetter => "sound",
+                    IHolotapeVoiceGetter => "voice",
+                    IHolotapeProgramGetter => "program",
+                    IHolotapeTerminalGetter => "terminal",
+                    _ => null,
+                },
+                ["sound"] = (g.Data as IHolotapeSoundGetter)?.Sound.FormKeyNullable?.ToString(),
+                ["scene"] = (g.Data as IHolotapeVoiceGetter)?.Scene.FormKeyNullable?.ToString(),
+                ["programFile"] = (g.Data as IHolotapeProgramGetter)?.File,
+                ["terminalLink"] = (g.Data as IHolotapeTerminalGetter)?.Terminal.FormKeyNullable?.ToString(),
+                ["value"] = (int)g.Value,
+                ["weight"] = g.Weight,
+                ["modelFile"] = g.Model?.File,
+            };
+        // OS-15 Terminal: banners + static body paragraphs.
+        foreach (var g in check.Terminals)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["name"] = g.Name?.String,
+                ["headerText"] = g.HeaderText?.String,
+                ["welcomeText"] = g.WelcomeText?.String,
+                ["bodyTextCount"] = g.BodyTexts?.Count ?? 0,
+                ["bodyTexts"] = g.BodyTexts?.Select(b => b.Text?.String).ToList(),
+                ["modelFile"] = g.Model?.File,
+            };
+        // OS-15 Story Manager Event/Branch nodes.
+        foreach (var g in check.StoryManagerEventNodes)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["eventType"] = g.Type?.ToString(),
+                ["parent"] = g.Parent.FormKeyNullable?.ToString(),
+                ["previousSibling"] = g.PreviousSibling.FormKeyNullable?.ToString(),
+                ["flags"] = (int)(g.Flags ?? 0),
+                ["maxConcurrentQuests"] = g.MaxConcurrentQuests,
+                ["conditionCount"] = g.Conditions?.Count ?? 0,
+            };
+        foreach (var g in check.StoryManagerBranchNodes)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["parent"] = g.Parent.FormKeyNullable?.ToString(),
+                ["previousSibling"] = g.PreviousSibling.FormKeyNullable?.ToString(),
+                ["flags"] = (int)(g.Flags ?? 0),
+                ["maxConcurrentQuests"] = g.MaxConcurrentQuests,
+                ["conditionCount"] = g.Conditions?.Count ?? 0,
+            };
         // W6.5 Activator + W8 Location/LocationReferenceType/EncounterZone round-trip.
         foreach (var g in check.Activators)
             back[g.FormKey.ToString()] = new Dictionary<string, object?>
@@ -3595,6 +3817,10 @@ static int RunCreate(string[] argv)
                 ["name"] = g.Name?.String,
                 ["keywordCount"] = g.Keywords?.Count ?? 0,
                 ["scriptCount"] = g.VirtualMachineAdapter?.Scripts.Count ?? 0,
+                ["modelFile"] = g.Model?.File,
+                ["materialSwap"] = g.Model?.MaterialSwap.FormKeyNullable?.ToString(),
+                ["objectBounds"] = new[] { g.ObjectBounds.First.X, g.ObjectBounds.First.Y, g.ObjectBounds.First.Z,
+                                           g.ObjectBounds.Second.X, g.ObjectBounds.Second.Y, g.ObjectBounds.Second.Z },
             };
         // OS-14 OTFT: worn-item count is the round-trip proof the outfit survived to disk.
         foreach (var g in check.Outfits)
@@ -4094,6 +4320,18 @@ class RecordSpec
     public float? HoursUntilReset { get; set; }     // node reset window (hours)
     public List<ConditionSpec>? Conditions { get; set; } // node-level conditions (W1 builder)
     public List<SmqnQuestSpec>? Quests { get; set; }     // quests this node can (auto-)start
+    // OS-15 (rewritten 2026-11-24 after the original was lost) — NOTE/holotape, TERM, SMEN/SMBN.
+    // Holotape reuses Name/Model/MaterialSwap/Value/Weight/ObjectBounds; TERM reuses Name/Text
+    // (WelcomeText)/Model/MaterialSwap/ObjectBounds; SMEN/SMBN reuse Parent/PreviousSibling/Flags/
+    // MaxConcurrentQuests/Conditions above.
+    public string? HolotapeType { get; set; }       // Holotape.Types name: sound|voice|program|terminal
+    public string? Sound { get; set; }              // holotape sound -> SNDR FormLink
+    public string? Scene { get; set; }              // holotape voice -> SCEN FormLink
+    public string? ProgramFile { get; set; }        // holotape program -> .swf path
+    public string? TerminalLink { get; set; }       // holotape terminal -> TERM FormLink
+    public string? HeaderText { get; set; }         // TERM header banner
+    public List<string>? BodyTexts { get; set; }    // TERM static body paragraphs
+    public string? EventType { get; set; }          // SMEN StoryManagerEventNode.Types name
     // W8 Location / EncounterZone (Faz 3) — reuses Name/Keywords/Flags/Location
     public string? ParentLocation { get; set; }     // LCTN ParentLocation FormLink
     public string? Owner { get; set; }              // ECZN Owner FormLink (faction/npc)

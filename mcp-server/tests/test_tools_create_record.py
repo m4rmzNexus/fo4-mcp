@@ -1806,15 +1806,6 @@ def test_create_rejects_note_negative_value(tmp_path):
         fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
 
 
-# The C# writer for these records (Program.cs OS-15 NOTE/TERM/SMEN/SMBN + ACTI Model/OBND) was
-# lost before it was committed: no copy exists in git or in the October snapshot. The Python
-# layer and these tests survived. strict=True: once the writer is rebuilt these XPASS and fail,
-# so the marker gets removed. See docs/open-structures-roadmap-2026-06-24.md "Lost code".
-_LOST_CSHARP_WRITER = pytest.mark.xfail(
-    strict=True, reason="C# writer code lost (OS-15 / ACTI Model); see open-structures roadmap")
-
-
-@_LOST_CSHARP_WRITER
 def test_create_os15_records_roundtrip(real_env, staging_out):
     """OS-15: a program Holotape, a readable Terminal, a Story Manager Event node, and a Branch
     node in one plugin. Each round-trips from the on-disk binary (readback proof) and is
@@ -1876,7 +1867,6 @@ def test_create_os15_records_roundtrip(real_env, staging_out):
         assert "Welcome, Overseer." in blob          # the terminal welcome text
 
 
-@_LOST_CSHARP_WRITER
 def test_create_holotape_sound_and_terminal_link(real_env, staging_out):
     """OS-15: the FormLink holotape variants — a sound (audio-log) holotape pointing at a vanilla
     SoundDescriptor, and a terminal-link holotape. Both auto-add the master and round-trip their
@@ -1974,7 +1964,6 @@ def test_create_activator_control_script(real_env, staging_out):
     assert rec["scriptCount"] == 1             # VMAD round-tripped from the on-disk binary
 
 
-@_LOST_CSHARP_WRITER
 def test_create_activator_with_model(real_env, staging_out):
     """2026-06-26: a scripted workshop ACTI (the coupon showcase board) carries a world mesh +
     placement bounds alongside its control script. Model(MODL) + ObjectBounds(OBND) round-trip
