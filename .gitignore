@@ -76,6 +76,13 @@ tools/mutagen-cli/*
 tools/mutagen-cli/src/*
 !tools/mutagen-cli/src/Program.cs
 !tools/mutagen-cli/src/Mutagen.RecordQuery.csproj
+# nifsharp-cli: same pattern (its source was lost once because src/ was not allowlisted).
+!tools/nifsharp-cli/
+tools/nifsharp-cli/*
+!tools/nifsharp-cli/src/
+tools/nifsharp-cli/src/*
+!tools/nifsharp-cli/src/Program.cs
+!tools/nifsharp-cli/src/NifSharp.Build.csproj
 # resaver-shim: version-control the small Java source, ignore the built jar +
 # build/ (and the JDK + ReSaver binaries stay ignored by tools/*).
 !tools/resaver-shim/

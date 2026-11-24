@@ -2,6 +2,9 @@
 
 **Tarih:** 2026-06-24
 **Roadmap:** `docs/blender-asset-pipeline-completion-roadmap.md` Faz C (blokör #2 keyfi geometri + #4 `fo4_nif_build` aracı yok)
+**2026-11-24:** Özgün `tools/nifsharp-cli/src` kayboldu (gitignore izin listesinde değildi); bu belgedeki
+sözleşme + §"BUILD SONUÇLARI" API'siyle yeniden yazıldı, aynı round-trip testi geçti, `src/` artık izleniyor.
+
 **Durum:** ✅ **BUILT + ROUND-TRIP PROVEN (2026-06-25).** nifsharp-cli inşa edildi (NiflySharp **1.3.0** —
 2.x net10-only olduğu için pinlendi; net9 toolchain), `fo4_nif_build` server.py'ye register edildi (Tool
 N8, toplam 43 tool), gerçek round-trip Money_Prewar.nif'e karşı kanıtlandı: BSTriShape mesh vertex-count'a
