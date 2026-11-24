@@ -13,6 +13,8 @@ authors = [{ name = "m4rmz" }]
 
 dependencies = [
     "mcp>=1.0.0",
+    "numpy",
+    "scipy",
     "pydantic>=2.5",
     "python-dotenv>=1.0",
 ]

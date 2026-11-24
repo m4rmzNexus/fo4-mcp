@@ -28,7 +28,12 @@ CLAMP_WRAP_BOTH = 3          # WRAP_S_WRAP_T — the vanilla value PyNifly drops
 def parse(path: str | Path) -> dict[str, Any]:
     """Parse the FO4 nif container into block-level pieces (no per-block field decode beyond what
     the fixes/validation need). Mirrors splice_collision.py's proven parser."""
-    b = bytearray(Path(path).read_bytes())
+    return parse_bytes(Path(path).read_bytes())
+
+
+def parse_bytes(buf: bytes | bytearray) -> dict[str, Any]:
+    """Parse a NIF buffer without creating a temporary file."""
+    b = bytearray(buf)
     p = b.index(b"\n") + 1
     p += 4 + 1 + 4                                   # version, endian, user version
     nblocks, = struct.unpack_from("<I", b, p); p += 4
@@ -45,15 +50,18 @@ def parse(path: str | Path) -> dict[str, Any]:
     sizes_off = p
     sizes = list(struct.unpack_from(f"<{nblocks}I", b, p)); p += 4 * nblocks
     nstr, = struct.unpack_from("<I", b, p); p += 8   # numStrings + maxStrLen
+    strings = []
     for _ in range(nstr):
-        n = struct.unpack_from("<I", b, p)[0]; p += 4 + n
+        n = struct.unpack_from("<I", b, p)[0]
+        strings.append(b[p + 4:p + 4 + n].decode("latin1"))
+        p += 4 + n
     ngroups, = struct.unpack_from("<I", b, p); p += 4 + 4 * ngroups
     blocks_start = p
     blocks = []
     for i in range(nblocks):
         blocks.append(b[p:p + sizes[i]]); p += sizes[i]
     tail = b[p:]
-    return dict(buf=b, nblocks=nblocks, types=[types[i] for i in tidx], sizes=sizes,
+    return dict(buf=b, nblocks=nblocks, types=[types[i] for i in tidx], sizes=sizes, strings=strings,
                 sizes_off=sizes_off, blocks_start=blocks_start, blocks=blocks, tail=tail, bsver=bsver)
 
 
@@ -114,7 +122,10 @@ def texture_set(meta: dict) -> list[str]:
     i = _one(meta, "BSShaderTextureSet")
     if i is None:
         return []
-    blk = meta["blocks"][i]
+    return _texture_paths(meta["blocks"][i])
+
+
+def _texture_paths(blk):
     nt = struct.unpack_from("<I", blk, 0)[0]
     out, p = [], 4
     for _ in range(nt):
@@ -337,18 +348,24 @@ def fo4_postprocess_nif(cfg: Config, target_nif: str, donor_nif: str,
     })
 
 
-def parse_bytes(buf: bytes | bytearray) -> dict[str, Any]:
-    """parse() on an in-memory buffer (for re-reading a just-spliced nif without a temp file)."""
-    import tempfile, os
-    fd, tmp = tempfile.mkstemp(suffix=".nif")
-    try:
-        os.write(fd, bytes(buf)); os.close(fd)
-        return parse(tmp)
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+def shader_paths(buf: bytes) -> dict[str, str]:
+    """Named material and direct texture references from FO4 shader blocks."""
+    meta = parse_bytes(buf)
+    if meta["bsver"] != 130:
+        raise ValueError("Expected a Fallout 4 BS version 130 NIF")
+    refs = {}
+    for i, (kind, block) in enumerate(zip(meta["types"], meta["blocks"])):
+        if kind == "BSShaderTextureSet":
+            for slot, path in enumerate(_texture_paths(block)):
+                refs[f"{i}/texture/{slot}"] = path
+        elif kind in ("BSLightingShaderProperty", "BSEffectShaderProperty"):
+            offset = 4 if kind == "BSLightingShaderProperty" else 0
+            name, = struct.unpack_from("<i", block, offset)
+            if name != -1:
+                if not 0 <= name < len(meta["strings"]):
+                    raise ValueError(f"Invalid shader name index at block {i}")
+                refs[f"{i}/material"] = meta["strings"][name]
+    return refs
 
 
 def fo4_validate_nif(cfg: Config, nif: str, donor_nif: str | None = None,

@@ -48,19 +48,20 @@ def fo4_get_environment(cfg: Config) -> dict[str, Any]:
     because it just reads filesystem state — no underlying binary call.
     """
     fo4 = cfg.fo4_install_dir
-    runtime_version = _detect_runtime_version(fo4) if fo4 else None
-    f4se_version    = _detect_f4se_version(fo4)    if fo4 else None
+    runtime = fo4 / "Fallout4.exe" if fo4 else None
+    loader = fo4 / "f4se_loader.exe" if fo4 else None
     mo2 = cfg.mo2_instance_dir
 
     return ok({
         "fo4": {
             "install_dir":     str(fo4) if fo4 else None,
-            "runtime_version": runtime_version,
-            "found":           fo4 is not None,
+            "runtime_version": _windows_file_version(runtime),
+            "found":           bool(runtime and runtime.is_file()),
         },
         "f4se": {
-            "version": f4se_version,
-            "found":   f4se_version is not None,
+            "version": _windows_file_version(loader),
+            "found":   bool(loader and loader.is_file()),
+            "data_dir_present": bool(fo4 and (fo4 / "Data" / "F4SE").is_dir()),
         },
         "mo2": {
             "instance_dir": str(mo2) if mo2 else None,
@@ -76,23 +77,29 @@ def fo4_get_environment(cfg: Config) -> dict[str, Any]:
     })
 
 
-def _detect_runtime_version(fo4_dir: Path) -> str | None:
-    r"""Read Fallout4.exe version. Stub: returns None until implemented.
+def _windows_file_version(exe: Path | None) -> str | None:
+    """Read the numeric VS_FIXEDFILEINFO version without starting the executable."""
+    import ctypes
+    import sys
 
-    Real impl: read PE version resource via pefile or a powershell call to
-    Get-Item .\Fallout4.exe | Select VersionInfo.
-    """
-    exe = fo4_dir / "Fallout4.exe"
-    return f"present (size={exe.stat().st_size})" if exe.exists() else None
-
-
-def _detect_f4se_version(fo4_dir: Path) -> str | None:
-    """Look for f4se_loader.exe and Data/F4SE/."""
-    loader = fo4_dir / "f4se_loader.exe"
-    if not loader.exists():
+    if sys.platform != "win32" or not exe or not exe.is_file():
         return None
-    f4se_data = fo4_dir / "Data" / "F4SE"
-    return f"loader present, Data/F4SE/={'yes' if f4se_data.exists() else 'no'}"
+    version = ctypes.windll.version
+    path = str(exe.resolve())
+    size = version.GetFileVersionInfoSizeW(path, None)
+    if not size:
+        return None
+    data = ctypes.create_string_buffer(size)
+    if not version.GetFileVersionInfoW(path, 0, size, data):
+        return None
+    ptr = ctypes.c_void_p()
+    length = ctypes.c_uint()
+    if not version.VerQueryValueW(data, "\\", ctypes.byref(ptr), ctypes.byref(length)) or length.value < 16:
+        return None
+    signature, _, ms, ls = struct.unpack("<4I", ctypes.string_at(ptr, 16))
+    if signature != 0xFEEF04BD:
+        return None
+    return f"{ms >> 16}.{ms & 0xffff}.{ls >> 16}.{ls & 0xffff}"
 
 
 # ---- Tool 2: load order ------------------------------------------------------
@@ -551,7 +558,7 @@ def _inspect_record_via_cli(
 # ---- Tool 3j: create record (authoring writer) ------------------------------
 
 # Record types the mutagen-cli `create` subcommand can author.
-_CREATE_SUPPORTED_TYPES = ("npc", "armor", "quest", "keyword", "formlist", "message", "global", "faction", "levelednpc", "leveleditem", "leveleditemoverride", "cell", "celloverride", "smqn", "activator", "location", "locationreftype", "encounterzone", "package", "book", "misc", "materialswap", "outfit", "weapon", "static", "door", "light", "container", "ingestible", "ingredient", "constructibleobject", "cobj")
+_CREATE_SUPPORTED_TYPES = ("npc", "armor", "quest", "keyword", "formlist", "message", "global", "faction", "levelednpc", "leveleditem", "leveleditemoverride", "cell", "celloverride", "smqn", "smen", "smbn", "activator", "location", "locationreftype", "encounterzone", "package", "book", "misc", "note", "holotape", "terminal", "term", "materialswap", "outfit", "weapon", "static", "door", "light", "container", "ingestible", "ingredient", "constructibleobject", "cobj")
 
 # Papyrus VMAD script-property value types the writer maps to ScriptProperty subclasses.
 _SCRIPT_PROPERTY_TYPES = ("object", "int", "float", "bool", "string")
@@ -1022,9 +1029,9 @@ def fo4_create_record(
                 f"spec.records[{i}].type '{rtype}' unsupported "
                 f"(Npc, Armor, Weapon, Quest, Keyword, FormList, Message, Global, Faction, "
                 f"LeveledNpc, LeveledItem, LeveledItemOverride, Cell, CellOverride, Smqn, "
-                f"Activator, Location, LocationRefType, EncounterZone, Package, Book, Misc, "
-                f"MaterialSwap, Outfit, Static, Door, Light, Container, Ingestible, "
-                f"Ingredient, ConstructibleObject)",
+                f"Smen, Smbn, Activator, Location, LocationRefType, EncounterZone, Package, "
+                f"Book, Misc, Note/Holotape, Terminal, MaterialSwap, Outfit, Static, Door, "
+                f"Light, Container, Ingestible, Ingredient, ConstructibleObject)",
                 {"supported": list(_CREATE_SUPPORTED_TYPES)},
             )
         if not eid and rtype.lower() not in ("celloverride", "leveleditemoverride"):
@@ -2219,6 +2226,82 @@ def fo4_create_record(
                 pts = str(pt).strip()
                 if pts:
                     rec["previewTransform"] = pts
+        elif rtype.lower() in ("note", "holotape"):
+            # OS-15 NOTE/Holotape — name + model(+materialSwap) + value/weight + objectBounds reuse the
+            # shared item handling. The payload is the Data union selected by holotapeType:
+            #   sound -> {sound: sound-descriptor FormKey}   voice -> {scene: SCEN FormKey}
+            #   program -> {programFile: ".swf" path}        terminal -> {terminalLink: TERM FormKey}
+            # The CLI does the authoritative enum/FormKey parse and requires the matching payload.
+            if r.get("holotapeType") is not None:
+                rec["holotapeType"] = str(r["holotapeType"]).strip()
+            for fld in ("sound", "scene", "programFile", "terminalLink", "model", "materialSwap"):
+                if r.get(fld) is not None:
+                    rec[fld] = str(r[fld]).strip()
+            for fld in ("value", "weight"):
+                if r.get(fld) is not None:
+                    try:
+                        v: Any = int(r[fld]) if fld == "value" else float(r[fld])
+                    except (TypeError, ValueError):
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].{fld} must be a number", {})
+                    if v < 0:
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].{fld} must be >= 0", {fld: v})
+                    rec[fld] = v
+            ob = r.get("objectBounds")
+            if ob is not None:
+                if not isinstance(ob, list) or len(ob) != 6:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be [x1,y1,z1,x2,y2,z2]", {})
+                try:
+                    obi = [int(v) for v in ob]
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be 6 integers", {})
+                if any(v < -32768 or v > 32767 for v in obi):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds values must be Int16 (-32768..32767)", {})
+                rec["objectBounds"] = obi
+        elif rtype.lower() in ("terminal", "term"):
+            # OS-15 TERM — readable info terminal: name + headerText (banner) + text (WelcomeText,
+            # shown on connect) + bodyTexts (static body paragraphs) + model(+materialSwap) +
+            # objectBounds. The CLI builds the TerminalBodyText list; submenu navigation is deferred.
+            if r.get("headerText") is not None:
+                rec["headerText"] = str(r["headerText"])
+            if r.get("text") is not None:
+                rec["text"] = str(r["text"])
+            for fld in ("model", "materialSwap"):
+                if r.get(fld) is not None:
+                    rec[fld] = str(r[fld]).strip()
+            bt = r.get("bodyTexts")
+            if bt is not None:
+                if not isinstance(bt, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].bodyTexts must be a list of strings", {})
+                rec["bodyTexts"] = [str(x) for x in bt]
+            ob = r.get("objectBounds")
+            if ob is not None:
+                if not isinstance(ob, list) or len(ob) != 6:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be [x1,y1,z1,x2,y2,z2]", {})
+                try:
+                    obi = [int(v) for v in ob]
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be 6 integers", {})
+                if any(v < -32768 or v > 32767 for v in obi):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds values must be Int16 (-32768..32767)", {})
+                rec["objectBounds"] = obi
         elif rtype.lower() == "materialswap":
             # MSWP: a retexture map. substitutions = [{original, replacement}] .bgsm paths
             # (Data-relative, "Materials\...\x.bgsm"). The CLI does the authoritative add.
@@ -2565,10 +2648,71 @@ def fo4_create_record(
                                 f"spec.records[{i}].quests[{j}].hoursUntilReset must be a number", {})
                     norm_q.append(qe)
                 rec["quests"] = norm_q
+        elif rtype.lower() in ("smen", "smbn"):
+            # OS-15 Story Manager Event/Branch Node — parent/previousSibling FormLinks; flags reuse
+            # AStoryManagerNode.Flag; conditions reuse the INFO/alias builder; maxConcurrentQuests uint.
+            # SMEN additionally REQUIRES eventType (StoryManagerEventNode.Types — what the node listens
+            # for); SMBN is a flag/condition grouping node with no event.
+            for fld in ("parent", "previousSibling"):
+                if r.get(fld) is not None:
+                    rec[fld] = str(r[fld]).strip()
+            if rtype.lower() == "smen":
+                if not str(r.get("eventType", "")).strip():
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}] (smen) needs an 'eventType' "
+                        f"(StoryManagerEventNode.Types name, e.g. ScriptEvent|QuestStart|KillActorEvent)",
+                        {})
+                rec["eventType"] = str(r["eventType"]).strip()
+            flags = r.get("flags")
+            if flags is not None:
+                if not isinstance(flags, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].flags must be a list of flag names", {})
+                rec["flags"] = [str(x).strip() for x in flags]
+            if r.get("maxConcurrentQuests") is not None:
+                try:
+                    mcq = int(r["maxConcurrentQuests"])
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].maxConcurrentQuests must be an integer", {})
+                if mcq < 0:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].maxConcurrentQuests must be >= 0", {})
+                rec["maxConcurrentQuests"] = mcq
+            if r.get("conditions") is not None:
+                rec["conditions"] = _norm_conditions(
+                    r["conditions"], f"spec.records[{i}].conditions")
         elif rtype.lower() in ("activator", "location"):
             # W6.5 ACTI / W8 LCTN — name (generic) + keywords; location also parentLocation.
             if rtype.lower() == "location" and r.get("parentLocation") is not None:
                 rec["parentLocation"] = str(r["parentLocation"]).strip()
+            # ACTI Model(+MSWP) + OBND (2026-06-26): scripted workshop ACTI (showcase board) needs a
+            # world mesh + placement bounds. CLI does the authoritative FormKey/Int16 construction.
+            if rtype.lower() == "activator":
+                for fld in ("model", "materialSwap"):
+                    if r.get(fld) is not None:
+                        rec[fld] = str(r[fld]).strip()
+                ob = r.get("objectBounds")
+                if ob is not None:
+                    if not isinstance(ob, list) or len(ob) != 6:
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].objectBounds must be [x1,y1,z1,x2,y2,z2]", {})
+                    try:
+                        obi = [int(v) for v in ob]
+                    except (TypeError, ValueError):
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].objectBounds must be 6 integers", {})
+                    if any(v < -32768 or v > 32767 for v in obi):
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].objectBounds values must be Int16 (-32768..32767)", {})
+                    rec["objectBounds"] = obi
             kws = r.get("keywords")
             if kws is not None:
                 if not isinstance(kws, list):
@@ -3402,6 +3546,32 @@ def fo4_release_preflight(cfg: Config, manifest: Manifest, plugin: str) -> dict[
     except Fo4McpError as e:
         findings.append({"level": "warning", "rule": "eligibility_unavailable", "section": "format",
             "message": f"ESL eligibility check unavailable: {e.message}"})
+
+    # --- real TES4 master/light flag vs required format (OS-18) ---
+    # The eligibility check above only knows what the content REQUIRES; this reads
+    # the plugin's ACTUAL header flags (via fo4_plan_plugin_format -> _read_tes4_flags)
+    # and catches a real mismatch so a wrong-flag plugin no longer ships silently.
+    # The structurally-invalid combo (light-flagged + new cells; previs can't live
+    # in FE-space) is prefixed "CRITICAL" by the planner -> ship-blocking error;
+    # softer mismatches (master flag simply not set yet) -> review warning.
+    try:
+        from .plugin_format import fo4_plan_plugin_format
+        pf = fo4_plan_plugin_format(cfg, str(plugin_path))["data"]
+        sections["format_flags"] = {
+            "current_format":           pf.get("current_format"),
+            "required_format":          pf.get("required_format"),
+            "is_esm":                   pf.get("is_esm"),
+            "is_light":                 pf.get("is_light"),
+            "current_matches_required": pf.get("current_matches_required"),
+        }
+        for conflict in pf.get("conflicts", []):
+            findings.append({
+                "level": "error" if conflict.startswith("CRITICAL") else "warning",
+                "rule": "plugin_flag_mismatch", "section": "format",
+                "message": conflict})
+    except Fo4McpError as e:
+        findings.append({"level": "warning", "rule": "format_flags_unavailable", "section": "format",
+            "message": f"plugin-format flag check unavailable: {e.message}"})
 
     # --- navmesh handoff roll-up ---
     try:

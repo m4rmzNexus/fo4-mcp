@@ -16,20 +16,24 @@ import sys
 from typing import Any
 
 from . import (
+    asset_catalog,
     ba2_pack,
     bgsm_ops,
     collision_ops,
     compact_formids,
     esl_flag,
     facegen,
+    geometry_ops,
     ingame_test,
     lod,
     nif_ops,
     plugin_format,
     previs,
+    release_zip,
     save_clean,
     save_inspect,
     seq,
+    texture_ops,
     tools,
     voice_bake,
 )
@@ -76,15 +80,36 @@ def build_server(cfg: Config | None = None, manifest: Manifest | None = None):
 
     # Tool 1
     @mcp.tool()
-    def fo4_get_environment() -> dict[str, Any]:
-        """Report FO4 install path, runtime version, F4SE, MO2 status."""
-        return _safe(lambda: tools.fo4_get_environment(cfg))
+    def fo4_get_environment(check_tools: list[str] | None = None) -> dict[str, Any]:
+        """Read FO4 and F4SE loader file versions and MO2 status. Optionally verify named
+        manifest binaries such as mutagen-cli, including its managed DLL when a hash is recorded."""
+        result = tools.fo4_get_environment(cfg)
+        if check_tools:
+            result["data"]["tool_status"] = manifest.check_selected(cfg.repo_root, check_tools)
+        return result
 
     # Tool 2
     @mcp.tool()
     def fo4_read_load_order() -> dict[str, Any]:
         """Read combined MO2 active profile + AppData plugins.txt load order."""
         return _safe(lambda: tools.fo4_read_load_order(cfg))
+
+    @mcp.tool()
+    def fo4_trace_catalog_asset(catalog: str, query: str, max_paths: int = 100) -> dict[str, Any]:
+        """Trace an exact EditorID, plugin:hex FormKey or virtual Data path in a Heybeli-format
+        SQLite catalog. Returns recorded variants and shape/material/texture links per source.
+        Evidence is from the supplied snapshot. Live MO2 priority and package contents are unchecked."""
+        return _safe(lambda: asset_catalog.inspect_catalog(cfg.repo_root / catalog, query, max_paths))
+
+    @mcp.tool()
+    def fo4_check_release_zip(archive: str, expected_members: list[str] | None = None,
+                              catalog: str | None = None, verify_crc: bool = False) -> dict[str, Any]:
+        """Check exact ZIP member paths, case-insensitive collisions, FOMOD source references and
+        loose NIF shader and binary material references in a plain Data layout. expected_members are archive-root
+        paths. verify_crc reads every ZIP member. A catalog lists providers of external references. Embedded BA2 contents,
+        FOMOD option installation and gameplay are unchecked."""
+        return _safe(lambda: release_zip.inspect_zip(cfg.repo_root / archive, expected_members or [],
+                                                     cfg.repo_root / catalog if catalog else None, verify_crc))
 
     # Tool 3
     @mcp.tool()
@@ -125,7 +150,12 @@ def build_server(cfg: Config | None = None, manifest: Manifest | None = None):
         derived from the FormID). CellOverride (W5, see fo4_place_into_cell). Story Manager
         (W6): smqn (StoryManagerQuestNode — event-driven quest auto-start: parent/
         previousSibling SM-tree links + flags + conditions + quests[{quest, hoursUntilReset}];
-        see fo4_inspect_sm_tree to pick the parent).
+        see fo4_inspect_sm_tree to pick the parent); OS-15 adds smen (StoryManagerEventNode —
+        a new event listener: eventType + flags + conditions + maxConcurrentQuests) and smbn
+        (StoryManagerBranchNode — a flag/condition grouping node). OS-15 item/content records:
+        note/holotape (NOTE — name/model/value/weight + a Data union by holotapeType:
+        sound|voice|program|terminal) and terminal/term (TERM — name + headerText + text
+        (WelcomeText) + bodyTexts[] readable info screen).
         FormLinks auto-add their masters.
         Output gated to staging/fixtures; an existing target is backed up to .bak only
         with confirm_overwrite=true."""
@@ -568,6 +598,44 @@ def build_server(cfg: Config | None = None, manifest: Manifest | None = None):
         bodyCount > 1 means a Tier-1 swap must target one body at a time (make_convex_collision
         body_index)."""
         return _safe(lambda: collision_ops.fo4_inspect_collision(cfg, nif))
+
+    # Tool N7 — texture authoring (texconv PNG->DDS re-encode, Blender pipeline Faz B2)
+    @mcp.tool()
+    def fo4_encode_texture(
+        source_image: str, output_dds: str,
+        fmt: str = "BC7_UNORM_SRGB", srgb: bool = True, mips: int = 0,
+        resize_pow2: bool = True, width: int | None = None, height: int | None = None,
+    ) -> dict[str, Any]:
+        """Encode a source image (PNG/TGA/BMP/JPG/TIFF/HDR/DDS) into a game-ready DDS via texconv —
+        real re-encode (gamma-correct mips + power-of-two resize), NOT the lossless dxgi-tag-flip.
+        FO4 convention: diffuse/albedo = BC7_UNORM_SRGB (sRGB); normal (_n) = BC5_UNORM (linear);
+        spec/mask = BC7_UNORM. `srgb` is auto-aligned to the format (linear format -> sRGB off, with a
+        warning). `mips=0` = full chain. `resize_pow2` rounds to the nearest power of two (mipmap-safe;
+        only when source dims are readable or width/height are given). Output validated to carry the
+        requested DXGI format (success != 'a file appeared'); gated to staging/fixtures."""
+        return _safe(lambda: texture_ops.fo4_encode_texture(
+            cfg, manifest, source_image, output_dds,
+            fmt=fmt, srgb=srgb, mips=mips, resize_pow2=resize_pow2, width=width, height=height))
+
+    # Tool N8 — FO4 geometry writer (template-edit BSTriShape, GPL-isolated nifsharp-cli, Blender Faz C)
+    @mcp.tool()
+    def fo4_nif_build(
+        template_nif: str, mesh: dict[str, Any], output_nif: str,
+        shape: str | int | None = None, flip_bitangent: bool = False,
+    ) -> dict[str, Any]:
+        """Author FO4 geometry by replacing ONE plain static BSTriShape in a template .nif from a JSON
+        mesh, via the GPL-isolated nifsharp-cli subprocess (NiflySharp). Every OTHER block (collision
+        bhkPhysicsSystem, BSLightingShaderProperty, NiNode tree) is byte-preserved — it does NOT
+        regenerate Havok the way PyNifly does. The shape resizes to the mesh's vertex count; tangents +
+        bitangents are derived if absent; bounds are recomputed. `mesh` keys: vertices[[x,y,z]],
+        uvs[[u,v]], triangles[[a,b,c]] (required); normals/tangents[[x,y,z]] (optional, derived if
+        absent); shape (optional name|index, also the `shape` arg). Skinned/dynamic/sub-indexed shapes
+        are refused (segment/skin handling = V2). Output gated to staging/fixtures (Steam Data refused);
+        result is run through nif_ops.validate() (Layer-0). `flip_bitangent` is the mirror-UV handedness
+        escape hatch. NOT in-game render-validated (Faz E gate). Raises a clear gated error if the
+        nifsharp-cli exe is not built."""
+        return _safe(lambda: geometry_ops.fo4_nif_build(
+            cfg, manifest, template_nif, mesh, output_nif, shape, flip_bitangent))
 
     return mcp
 
