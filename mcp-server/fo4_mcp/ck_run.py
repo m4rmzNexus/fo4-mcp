@@ -25,7 +25,8 @@ from typing import Any
 from .config import Config
 from .errors import ErrorCode, Fo4McpError, ToolBinaryMissingError
 
-_CK_TITLE = "CreationKit"
+# MO2's own auto-registered entry is titled "Creation Kit"; older hand-made setups used "CreationKit".
+_CK_TITLES = ("CreationKit", "Creation Kit")
 
 
 def _read_base_directory(ini: Path, mo2_dir: Path) -> Path:
@@ -42,13 +43,18 @@ def _read_base_directory(ini: Path, mo2_dir: Path) -> Path:
     return mo2_dir  # fallback: overwrite alongside the exe
 
 
-def _ck_entry_index(ini_lines: list[str]) -> int | None:
-    """Find the customExecutables index N whose N\\title == CreationKit."""
+def _ck_entry(ini_lines: list[str]) -> tuple[int, str] | None:
+    """Find the customExecutables (index N, title) whose N\\title is one of _CK_TITLES."""
     for l in ini_lines:
         key, _, val = l.partition("=")
-        if key.endswith("\\title") and val.strip() == _CK_TITLE:
-            return int(key.split("\\", 1)[0])
+        if key.endswith("\\title") and val.strip() in _CK_TITLES:
+            return int(key.split("\\", 1)[0]), val.strip()
     return None
+
+
+def _ck_entry_index(ini_lines: list[str]) -> int | None:
+    hit = _ck_entry(ini_lines)
+    return hit[0] if hit else None
 
 
 _DEFAULT_FAILURE_MARKERS = ("ERROR", "FATAL", "failed", "Assert")
@@ -93,11 +99,13 @@ def run_ck_via_mo2(
 
     raw = ini.read_text(encoding="utf-8", errors="surrogateescape")
     lines = raw.splitlines()
-    idx = _ck_entry_index(lines)
-    if idx is None:
+    hit = _ck_entry(lines)
+    if hit is None:
         raise Fo4McpError(
             ErrorCode.INVALID_ARGUMENT,
-            f"no MO2 custom-executable titled '{_CK_TITLE}' — add Creation Kit to MO2 first", {})
+            f"no MO2 custom-executable titled {' or '.join(repr(t) for t in _CK_TITLES)}"
+            " — add Creation Kit to MO2 first", {})
+    idx, title = hit
 
     bak = ini.with_suffix(ini.suffix + ".ckrunbak")
     shutil.copy2(ini, bak)
@@ -119,9 +127,10 @@ def run_ck_via_mo2(
             except OSError:
                 pass
 
-        # launch via ShellExecute (same as the in-game runner) — detached, shell-owned
+        # launch via ShellExecute (same as the in-game runner) — detached, shell-owned.
+        # Quoted: a title with a space ("Creation Kit") would otherwise split into two argv items.
         rc = ctypes.windll.shell32.ShellExecuteW(
-            None, "open", str(mo2_exe), f"moshortcut://:{_CK_TITLE}", str(mo2_exe.parent), 1)
+            None, "open", str(mo2_exe), f'"moshortcut://:{title}"', str(mo2_exe.parent), 1)
         if rc <= 32:
             raise Fo4McpError(ErrorCode.SUBPROCESS_FAILED,
                               f"ShellExecute failed to launch MO2 (code {rc})", {})

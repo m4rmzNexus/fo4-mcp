@@ -132,6 +132,32 @@ def test_ck_entry_index_absent():
     assert _ck_entry_index(lines) is None
 
 
+def test_ck_entry_matches_mo2_default_title():
+    """MO2 auto-registers CK as 'Creation Kit' (with a space) — the live instance has that."""
+    lines = "1\\title=F4SE\n4\\title=Creation Kit\n".splitlines()
+    assert _ck_entry_index(lines) == 4
+    assert ck_run._ck_entry(lines) == (4, "Creation Kit")
+
+
+def test_run_ck_launches_quoted_shortcut_for_spaced_title(tmp_path, monkeypatch):
+    """The moshortcut argument is quoted so 'Creation Kit' reaches MO2 as one argv item."""
+    import ctypes
+
+    base = tmp_path / "data"
+    base.mkdir()
+    body = (_INI_HEAD + f"base_directory={base.as_posix()}\n[customExecutables]\n"
+            "4\\title=Creation Kit\n4\\binary=C:/x/CreationKit.exe\n4\\arguments=\n")
+    mo2, install = _make_mo2(tmp_path, base_dir=base, ini_body=body)
+    calls = []
+    monkeypatch.setattr(ctypes.windll.shell32, "ShellExecuteW",
+                        lambda *a: calls.append(a) or 42)
+    _patch_clock(monkeypatch, [0, 1, 2, 3, 4])
+    _proc_seq(monkeypatch, [True, False])
+    _record_kills(monkeypatch)
+    run_ck_via_mo2(_cfg(tmp_path, mo2=mo2, install=install), ["-GenerateSEQ:M.esp"], poll=1)
+    assert calls and calls[0][3] == '"moshortcut://:Creation Kit"'
+
+
 # ---------------- run_ck_via_mo2: missing-prereq guards ----------------
 
 def test_run_ck_no_mo2_raises(tmp_path):
