@@ -17,8 +17,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fo4_mcp.bgsm_ops import (
-    SIGNATURE, decode, encode, defaults, apply_fields, summarize,
-    fo4_create_bgsm, fo4_inspect_bgsm,
+    SIGNATURE, SIGNATURE_BGEM, decode, encode, defaults, defaults_bgem,
+    apply_fields, summarize, fo4_create_bgsm, fo4_inspect_bgsm,
 )
 from fo4_mcp.config import Config
 from fo4_mcp.errors import Fo4McpError, PathForbiddenError
@@ -133,3 +133,89 @@ def test_create_forbidden_output_raises(tmp_path):
     forbidden = "C:/Program Files (x86)/Steam/steamapps/common/Fallout 4/Data/x.bgsm"
     with pytest.raises(PathForbiddenError):
         fo4_create_bgsm(_cfg(tmp_path), forbidden, fields={"DiffuseTexture": "x.dds"})
+
+
+# ---- BGEM (effect material) — second signature + tail (Track 4a) ----
+
+@pytest.mark.parametrize("v", [2, 10, 11, 15, 16, 20, 21, 22])
+def test_bgem_defaults_roundtrip_every_version(v):
+    blob = encode(defaults_bgem(v))
+    again = decode(blob)
+    assert again["_signature"] == SIGNATURE_BGEM
+    assert again["Version"] == v
+    assert encode(again) == blob               # decode->encode fixed point
+    assert again["_trailing"] == b""           # defaults consume exactly the schema
+
+
+def test_bgem_signature_selects_schema():
+    # a BGEM blob decodes with the effect-material tail (BaseTexture, not DiffuseTexture)
+    d = decode(encode(defaults_bgem(2)))
+    assert "BaseTexture" in d and "DiffuseTexture" not in d
+    assert summarize(d)["_type"] == "BGEM"
+
+
+def test_bgem_glass_block_gated_on_v21_and_enabled():
+    off = encode(defaults_bgem(22))                 # GlassEnabled=0 -> no glass payload
+    d = defaults_bgem(22)
+    apply_fields(d, {"GlassEnabled": True})
+    on = encode(d)
+    # glass payload at v22 = FresnelColor(12) + BlurScaleBase(4) + BlurScaleFactor(4) + Refraction(4)
+    assert len(on) == len(off) + 24
+
+
+def test_bgem_emittance_color_only_v11_plus():
+    short = encode(defaults_bgem(2))                # v2: no EmittanceColor (>=11)
+    full = encode(defaults_bgem(11))               # v11: + EmittanceColor (12) and any other >=11 fields
+    assert "EmittanceColor" not in decode(short)
+    assert decode(full)["_signature"] == SIGNATURE_BGEM
+
+
+def test_bgem_cross_format_field_rejected():
+    # a BGSM-only field on a BGEM dict (and vice-versa) is rejected, not a silent no-op
+    with pytest.raises(Fo4McpError):
+        apply_fields(defaults_bgem(2), {"DiffuseTexture": "x.dds"})
+    with pytest.raises(Fo4McpError):
+        apply_fields(defaults(2), {"BaseColorScale": 1.0})
+
+
+def test_bgem_color_lossless():
+    d = defaults_bgem(11)
+    d["BaseColor"] = [0.111111, 0.222222, 0.333333]
+    back = decode(encode(d))["BaseColor"]
+    assert all(abs(a - b) < 1e-6 for a, b in zip(back, [0.111111, 0.222222, 0.333333]))
+
+
+def test_create_bgem_from_suffix(tmp_path):
+    # output ending .bgem builds an effect material at default v20
+    r = fo4_create_bgsm(_cfg(tmp_path), "staging/fx.bgem",
+                        fields={"BaseTexture": "Effects/glow_d.dds", "FalloffEnabled": True})["data"]
+    assert r["materialType"] == "BGEM" and r["version"] == 20
+    assert r["fields"]["BaseTexture"] == "Effects/glow_d.dds"
+    assert r["fields"]["FalloffEnabled"] == 1
+    assert decode((tmp_path / "staging/fx.bgem").read_bytes())["_signature"] == SIGNATURE_BGEM
+
+
+def test_inspect_bgem_autodetects(tmp_path):
+    cfg = _cfg(tmp_path)
+    fo4_create_bgsm(cfg, "staging/fx.bgem", fields={"BaseTexture": "M/b.dds"})
+    r = fo4_inspect_bgsm(cfg, "staging/fx.bgem")["data"]
+    assert r["roundTripExact"] is True
+    assert r["fields"]["_type"] == "BGEM"
+    assert r["fields"]["BaseTexture"] == "M/b.dds"
+
+
+# Optional: byte-exact round-trip against the real vanilla BGEM corpus (gitignored staging dir).
+# Skipped in CI where the golden samples are absent; proves the writer on the genuine format.
+_GOLDEN = Path(__file__).resolve().parents[2] / "staging" / "coupon-mod" / "_vanilla_bgsm"
+
+
+@pytest.mark.skipif(not _GOLDEN.exists(), reason="vanilla BGEM corpus not present")
+def test_bgem_vanilla_corpus_byte_exact():
+    bgem = [p for p in _GOLDEN.rglob("*") if p.suffix.lower() == ".bgem"]
+    assert bgem, "no .bgem samples found"
+    for p in bgem:
+        raw = p.read_bytes()
+        d = decode(raw)
+        assert d["_signature"] == SIGNATURE_BGEM
+        assert encode(d) == raw, f"{p.name} not byte-exact"
+        assert d["_trailing"] == b"", f"{p.name} has trailing bytes"

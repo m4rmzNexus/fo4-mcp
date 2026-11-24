@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fo4_mcp.config import Config, load_config
-from fo4_mcp.errors import Fo4McpError
+from fo4_mcp.errors import Fo4McpError, ToolBinaryMissingError
 from fo4_mcp.manifest import parse_manifest
 from fo4_mcp.tools import (
     fo4_create_record,
@@ -192,3 +192,55 @@ def test_release_preflight_composes_sections(real_env, staging_out):
     # the new-cell ESM-flag advisory surfaces as a review-level finding
     rules = {f["rule"] for f in data["findings"]}
     assert "esm_flag_required" in rules
+
+
+# ---------------- OS-18: real TES4-flag preflight (monkeypatched, no writer) ----------------
+
+def _degrade_heavy_subchecks(monkeypatch):
+    """Make the writer/CLI-backed preflight sub-checks degrade to caught warnings so a
+    unit test can exercise ONLY the format-flag path on a dummy plugin file."""
+    import fo4_mcp.tools as T
+    def _unavail(*a, **k):
+        raise ToolBinaryMissingError("backend", None)
+    for fn in ("fo4_check_esl_eligibility", "fo4_navmesh_handoff",
+               "fo4_voice_handoff", "_cell_navmesh_list"):
+        monkeypatch.setattr(T, fn, _unavail)
+
+
+def test_release_preflight_blocks_on_critical_flag_mismatch(tmp_path, monkeypatch):
+    """OS-18: a light-flagged plugin that creates new cells is structurally invalid
+    (new-cell previs can't live in FE-space) -> preflight must SHIP-BLOCK, not pass."""
+    import fo4_mcp.plugin_format as PF
+    plugin = tmp_path / "Bad.esp"
+    plugin.write_bytes(b"TES4" + b"\x00" * 60)  # exists; real flag-read path is mocked below
+    _degrade_heavy_subchecks(monkeypatch)
+    monkeypatch.setattr(PF, "fo4_plan_plugin_format", lambda cfg, p: {"data": {
+        "current_format": "esl-flagged-esp (light)", "required_format": "esm-flagged-esp",
+        "is_esm": False, "is_light": True, "current_matches_required": False,
+        "conflicts": ["CRITICAL: plugin is light-flagged but creates new cell/worldspace records"],
+    }})
+    data = fo4_release_preflight(_cfg(tmp_path), _MANIFEST, str(plugin))["data"]
+    assert data["verdict"] == "ship-blocked"
+    assert data["error_count"] >= 1
+    assert "format_flags" in data["sections"]
+    assert any(f["rule"] == "plugin_flag_mismatch" and f["level"] == "error"
+               for f in data["findings"])
+
+
+def test_release_preflight_warns_on_unset_master_flag(tmp_path, monkeypatch):
+    """A new-cell plugin whose ESM master flag simply isn't set yet is a review
+    warning (set the flag before ship), NOT a hard block."""
+    import fo4_mcp.plugin_format as PF
+    plugin = tmp_path / "Draft.esp"
+    plugin.write_bytes(b"TES4" + b"\x00" * 60)
+    _degrade_heavy_subchecks(monkeypatch)
+    monkeypatch.setattr(PF, "fo4_plan_plugin_format", lambda cfg, p: {"data": {
+        "current_format": "plain-esp", "required_format": "esm-flagged-esp",
+        "is_esm": False, "is_light": False, "current_matches_required": False,
+        "conflicts": ["new cell/worldspace present but the ESM master flag is OFF — set it"],
+    }})
+    data = fo4_release_preflight(_cfg(tmp_path), _MANIFEST, str(plugin))["data"]
+    assert data["error_count"] == 0
+    assert data["verdict"] == "review"
+    assert any(f["rule"] == "plugin_flag_mismatch" and f["level"] == "warning"
+               for f in data["findings"])

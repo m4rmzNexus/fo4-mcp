@@ -1783,6 +1783,113 @@ def test_inspect_sm_tree_node_children(real_env):
     assert d["childCount"] >= 1
 
 
+# ---------------- OS-15: Holotape (NOTE) / Terminal (TERM) / SMEN / SMBN ----------------
+
+def test_create_rejects_smen_without_event_type(tmp_path):
+    """An SMEN must declare an eventType (the listener it fires on) — Python-level reject."""
+    spec = {"records": [{"type": "smen", "editorId": "NoEvent"}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_terminal_non_list_bodytexts(tmp_path):
+    """Terminal bodyTexts must be a list of strings (shape check before the CLI)."""
+    spec = {"records": [{"type": "terminal", "editorId": "T", "bodyTexts": "nope"}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_note_negative_value(tmp_path):
+    """A holotape value must be a non-negative number (Python-level range check)."""
+    spec = {"records": [{"type": "note", "editorId": "N", "value": -5}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_os15_records_roundtrip(real_env, staging_out):
+    """OS-15: a program Holotape, a readable Terminal, a Story Manager Event node, and a Branch
+    node in one plugin. Each round-trips from the on-disk binary (readback proof) and is
+    independently queryable by a fresh overlay; the SMBN parent FormLink auto-adds the master.
+    Spriggit (2nd engine) confirms the record-type folders + key payloads."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os15Records.esp"
+    spec = {"records": [
+        {"type": "note", "editorId": "Os15Holo", "name": "Test Audio Log",
+         "holotapeType": "program", "programFile": "Interface\\HoloGames\\test.swf",
+         "value": 0, "weight": 0.1},
+        {"type": "terminal", "editorId": "Os15Term", "name": "Lab Terminal",
+         "headerText": "ROBCO INDUSTRIES (TM) TERMLINK", "text": "Welcome, Overseer.",
+         "bodyTexts": ["The reactor is stable.", "All systems nominal."]},
+        {"type": "smen", "editorId": "Os15Event", "eventType": "ScriptEvent",
+         "flags": ["Random"], "maxConcurrentQuests": 2,
+         "conditions": [{"function": "GetRandomPercent", "comparison": "LessThan", "value": 50}]},
+        {"type": "smbn", "editorId": "Os15Branch", "parent": _DMND_EVENT, "flags": ["Random"]},
+    ]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    assert "Fallout4.esm" in data["masters"]        # the SMBN parent auto-added it
+    holo, term, smen, smbn = data["records"]
+    # NOTE: program holotape — the Data-union discriminator + the .swf path are the proof
+    assert holo["holotapeType"] == "program"
+    assert holo["programFile"].endswith("test.swf")
+    assert holo["sound"] is None and holo["scene"] is None
+    # TERM: header/welcome banners + the two body paragraphs
+    assert term["headerText"].startswith("ROBCO")
+    assert term["welcomeText"] == "Welcome, Overseer."
+    assert term["bodyTextCount"] == 2
+    assert term["bodyTexts"] == ["The reactor is stable.", "All systems nominal."]
+    # SMEN: the event-type listener + Random flag + concurrency + condition
+    assert smen["eventType"] == "ScriptEvent"
+    assert smen["flags"] == 1                        # AStoryManagerNode.Flag.Random = 1
+    assert smen["maxConcurrentQuests"] == 2
+    assert smen["conditionCount"] == 1
+    # SMBN: parent link round-trip + Random flag (no event — branches don't listen)
+    assert smbn["parent"] == _DMND_EVENT
+    assert smbn["flags"] == 1
+    # independently queryable from a fresh overlay (4 distinct record types)
+    for eid, rtype in (("Os15Holo", "Holotape"), ("Os15Term", "Terminal"),
+                       ("Os15Event", "StoryManagerEventNode"), ("Os15Branch", "StoryManagerBranchNode")):
+        q = fo4_inspect_record(cfg, manifest, str(out), eid)["data"]
+        assert q["found"] is True
+        assert q["records"][0]["record_type"] == rtype
+    # Spriggit (2nd engine): record-type folders + key payloads
+    if (_REPO / "tools" / "spriggit" / "Spriggit.CLI.exe").exists():
+        yaml_dir = staging_out / "os15-yaml"
+        exp = fo4_spriggit_export(cfg, manifest, str(out), str(yaml_dir))
+        assert exp["data"]["ok"]
+        yamls = list(yaml_dir.rglob("*.yaml"))
+        blob = "\n".join(p.read_text(encoding="utf-8") for p in yamls)
+        assert any("Holotape" in str(p) for p in yamls)
+        assert any("Terminal" in str(p) for p in yamls)
+        assert any("StoryManagerEventNode" in str(p) for p in yamls)
+        assert "ScriptEvent" in blob                 # the SMEN event type
+        assert "Welcome, Overseer." in blob          # the terminal welcome text
+
+
+def test_create_holotape_sound_and_terminal_link(real_env, staging_out):
+    """OS-15: the FormLink holotape variants — a sound (audio-log) holotape pointing at a vanilla
+    SoundDescriptor, and a terminal-link holotape. Both auto-add the master and round-trip their
+    discriminator + linked FormKey, proving the Data union isn't program-only."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os15Holo2.esp"
+    snd = "0FB0DD:Fallout4.esm"   # a vanilla SoundDescriptor (NPCHumanEshowHello-ish range)
+    spec = {"records": [
+        {"type": "note", "editorId": "Os15SndHolo", "name": "Audio Diary",
+         "holotapeType": "sound", "sound": snd},
+        {"type": "terminal", "editorId": "Os15Term2", "name": "Linked Terminal",
+         "text": "Insert holotape."},
+    ]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    assert "Fallout4.esm" in data["masters"]
+    holo = data["records"][0]
+    assert holo["holotapeType"] == "sound"
+    assert holo["sound"] == snd
+    assert holo["programFile"] is None
+
+
 # ---------------- Faz 3 / W6.5 + W8: ACTI / LCTN / LCRT / ECZN base records ----------------
 
 def test_create_rejects_encounterzone_bad_level(tmp_path):
@@ -1855,6 +1962,30 @@ def test_create_activator_control_script(real_env, staging_out):
     assert "Fallout4.esm" in data["masters"]   # the object property's FormKey auto-added it
     rec = data["records"][0]
     assert rec["scriptCount"] == 1             # VMAD round-tripped from the on-disk binary
+
+
+def test_create_activator_with_model(real_env, staging_out):
+    """2026-06-26: a scripted workshop ACTI (the coupon showcase board) carries a world mesh +
+    placement bounds alongside its control script. Model(MODL) + ObjectBounds(OBND) round-trip
+    from the on-disk binary — previously 'deferred' on the ACTI writer."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "ActiModel.esp"
+    spec = {"records": [{
+        "type": "activator", "editorId": "DN_TestBoard", "name": "Display Board",
+        "model": "PrewarCoupons\\DN_CouponBoard.nif",
+        "objectBounds": [-64, -4, -40, 64, 4, 40],
+        "scripts": [{"name": "DN_CouponBoardScript"}],
+    }]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    rec = data["records"][0]
+    assert rec["modelFile"] == "PrewarCoupons\\DN_CouponBoard.nif"   # MODL survived to disk
+    assert rec["objectBounds"] == [-64, -4, -40, 64, 4, 40]          # OBND survived to disk
+    assert rec["scriptCount"] == 1                                   # VMAD still attached
+    # independently queryable as an Activator
+    q = fo4_inspect_record(cfg, manifest, str(out), "DN_TestBoard")["data"]
+    assert q["found"] is True and q["records"][0]["record_type"] == "Activator"
 
 
 # ---------------- Faz 3 / W8.5: door-link (XTEL) teleport ----------------

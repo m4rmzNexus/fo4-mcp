@@ -16,10 +16,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fo4_mcp import geometry_ops
+from fo4_mcp import geometry_ops, nif_ops
 from fo4_mcp.config import Config
 from fo4_mcp.errors import ErrorCode, Fo4McpError, PathForbiddenError
-from fo4_mcp.manifest import Manifest
+from fo4_mcp.manifest import Manifest, parse_manifest
+
+_REPO = Path(__file__).resolve().parents[2]
 
 
 def _cfg(repo_root: Path) -> Config:
@@ -117,16 +119,54 @@ def test_build_missing_template_raises(tmp_path):
     assert ei.value.code == ErrorCode.INVALID_ARGUMENT
 
 
-# ---- integration round-trip (skipped until the exe is built) ----
+# ---- integration round-trip (skipped until the exe + a real template are present) ----
 def require_or_skip_nifsharp_cli(cfg, manifest) -> None:
     """Skip when the GPL-isolated geometry shim isn't built (mirrors conftest.require_or_skip_mutagen_cli)."""
     if geometry_ops._nifsharp_cli_binary(cfg, manifest) is None:
         pytest.skip("nifsharp-cli not built (geometry shim gated)")
 
 
+def _thin_box_mesh() -> dict:
+    """A unit box with real Z thickness (0..0.5) — 8 verts / 12 tris. Non-flat so nif_ops.validate's
+    zero-thickness gate passes (a flat quad blanks the Pip-Boy preview, see fo4-flat-misc memory)."""
+    return {
+        "vertices": [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+                     [0, 0, 0.5], [1, 0, 0.5], [1, 1, 0.5], [0, 1, 0.5]],
+        "uvs": [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0], [1, 0], [1, 1], [0, 1]],
+        "triangles": [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
+                      [0, 1, 5], [0, 5, 4], [3, 7, 6], [3, 6, 2],
+                      [0, 4, 7], [0, 7, 3], [1, 2, 6], [1, 6, 5]],
+    }
+
+
 def test_geometry_roundtrip_integration(tmp_path):
-    cfg = _cfg(tmp_path)
-    manifest = _empty_manifest(tmp_path)
+    """Real template-edit round-trip: replace Money_Prewar's BSTriShape with a thin box, then prove
+    (a) the geometry took (count/flags/tangents), (b) our Layer-0 nif_ops.validate reads it back, and
+    (c) the collision bhkPhysicsSystem is byte-preserved (NiflySharp in-place edit, no PyNifly regen)."""
+    manifest = parse_manifest(_REPO / "tools" / "MANIFEST.md")
+    cfg = _cfg(_REPO)
     require_or_skip_nifsharp_cli(cfg, manifest)
-    pytest.skip("template-edit round-trip needs a real FO4 BSTriShape template + the built exe; "
-                "wire up once nifsharp-cli is published")
+
+    template = _REPO / "staging" / "coupon-mod" / "_template" / "Money_Prewar.nif"
+    if not template.is_file():
+        pytest.skip(f"round-trip template absent: {template}")
+
+    out_rel = "staging/faz-c-geometry-test/roundtrip_box.nif"
+    res = geometry_ops.fo4_nif_build(
+        cfg, manifest,
+        template_nif=str(template), mesh=_thin_box_mesh(), output_nif=out_rel)
+
+    assert res["ok"] is True
+    data = res["data"]
+    assert data["numVerts"] == 8 and data["numTris"] == 12
+    assert set(data["vertexFlags"]) >= {"VERTEX", "UV", "NORMAL", "TANGENT"}
+    assert data["tangentsCalculated"] is True
+
+    out_path = _REPO / out_rel
+    assert out_path.is_file()
+    # Layer-0 gate: our own read-side decode must accept it, and the collision must survive the edit.
+    v = nif_ops.validate(out_path)
+    assert v["info"]["bhkPhysicsSystem"] > 0          # collision byte-preserved (not regenerated)
+    assert v["info"]["meshZExtent"] > 0               # real thickness (the box, not a flat quad)
+    assert "TANGENT" in v["info"]["vertexFlags"]
+    out_path.unlink(missing_ok=True)                  # tidy the staging artifact
