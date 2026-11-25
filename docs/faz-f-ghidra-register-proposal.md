@@ -65,7 +65,7 @@ hem köprü yolu hem python interpreter **mutlak yol** olarak verilir.
 {
   "mcpServers": {
     "ghidra-mcp": {
-      "command": "C:/Users/m4rmz/AppData/Local/Programs/Python/Python312/python.exe",
+      "command": "C:/Users/<kullanici>/AppData/Local/Programs/Python/Python312/python.exe",
       "args": [
         "C:/Modding/fo4-mcp/tools/ghidra-mcp/bridge_mcp_ghidra.py",
         "--transport", "stdio",
