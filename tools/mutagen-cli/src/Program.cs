@@ -469,6 +469,54 @@ static int RunCellNavmeshList(string[] argv)
     catch (Exception e) { return Fail($"load error: {e.Message}"); }
 }
 
+// OS-13: render a condition function param from the correct packed slot. A FunctionConditionData
+// overlaps ONE slot across three views (number/string/record); which view is valid depends on the
+// function. Condition.GetParameterTypes(Function) tells us the slot's ParameterType -> bucket it
+// into Number | String | Form | None and read the matching view. Without this the dump always read
+// the Form view, so GetIsAliasRef (an Alias = NUMBER slot) showed a spurious/null FormKey instead
+// of the alias index. `which` is 1 or 2.
+static string? RenderParam(IFunctionConditionDataGetter d, int which)
+{
+    var (p1, p2, _) = Condition.GetParameterTypes(d.Function);
+    var pt = which == 1 ? p1 : p2;
+    switch (pt)
+    {
+        case Condition.ParameterType.None:
+            return null;
+        case Condition.ParameterType.String:
+        case Condition.ParameterType.VariableName:
+            return which == 1 ? d.ParameterOneString : d.ParameterTwoString;
+        // Number-like slots: the value lives in ParameterOne/TwoNumber, not as a FormKey.
+        case Condition.ParameterType.Integer:
+        case Condition.ParameterType.Float:
+        case Condition.ParameterType.Alias:
+        case Condition.ParameterType.QuestStage:
+        case Condition.ParameterType.Sex:
+        case Condition.ParameterType.Axis:
+        case Condition.ParameterType.Alignment:
+        case Condition.ParameterType.CrimeType:
+        case Condition.ParameterType.CriticalStage:
+        case Condition.ParameterType.MiscStat:
+        case Condition.ParameterType.FormType:
+        case Condition.ParameterType.CastingSource:
+        case Condition.ParameterType.WardState:
+        case Condition.ParameterType.VATSValueFunction:
+        case Condition.ParameterType.VATSValueParam:
+            return $"{(which == 1 ? d.ParameterOneNumber : d.ParameterTwoNumber)}";
+        // Everything else is a record/Form slot -> render the FormKey.
+        default:
+            return (which == 1 ? d.ParameterOneRecord : d.ParameterTwoRecord).FormKeyNullable?.ToString();
+    }
+}
+
+// OS-13: the GetParameterTypes category string for a slot, so a consumer can tell number-vs-form
+// unambiguously (e.g. paramType1=="Alias" proves the alias-index render path).
+static string RenderParamType(IFunctionConditionDataGetter d, int which)
+{
+    var (p1, p2, _) = Condition.GetParameterTypes(d.Function);
+    return $"{(which == 1 ? p1 : p2)}";
+}
+
 // ---- dialogue-dump: inspect a quest's player-dialogue wiring (DLBR + DIAL + INFO) so an authored
 // quest can be diffed against a known-working vanilla one (why doesn't the wheel surface?). Read-only.
 //   no --quest: list quests that own a Player+TopLevel DialogBranch (candidate player-dialogue quests)
@@ -535,12 +583,32 @@ static int RunDialogueDump(string[] argv)
                 setStageOnBegin = info.SetParentQuestStage?.OnBegin,
                 setStageOnEnd = info.SetParentQuestStage?.OnEnd,
                 hasFragment = info.VirtualMachineAdapter is not null,
+                // OS-13: full TIF VMAD fragment readback (scriptName + per-OnBegin/OnEnd
+                // scriptName/fragmentName), null when no ScriptFragments adapter. Proves OS-04.
+                fragment = info.VirtualMachineAdapter?.ScriptFragments is { } sf ? new {
+                    scriptName = sf.Script?.Name,
+                    onBegin = sf.OnBegin is { } ob ? new { scriptName = ob.ScriptName, fragmentName = ob.FragmentName } : null,
+                    onEnd = sf.OnEnd is { } oe ? new { scriptName = oe.ScriptName, fragmentName = oe.FragmentName } : null,
+                } : null,
+                // OS-13: INFO link/scene readback — emits null until link/scene authoring lands (P4),
+                // but the shape contract is fixed now so consumers can rely on the keys.
+                previousDialog = info.PreviousDialog.FormKeyNullable?.ToString(),
+                linkTopic = info.Topic.FormKeyNullable?.ToString(),
+                startScene = info.StartScene.FormKeyNullable?.ToString(),
+                startScenePhase = info.StartScenePhase,
                 conditionCount = info.Conditions.Count,
                 conditions = info.Conditions.Select(c => new {
                     fn = c.Data is IFunctionConditionDataGetter f ? $"{f.Function}" : null,
                     runOn = $"{c.Data?.RunOnType}",
                     reference = c.Data?.Reference.FormKeyNullable?.ToString(),
-                    param1 = c.Data is IFunctionConditionDataGetter f2 ? $"{f2.ParameterOneRecord.FormKeyNullable}" : null,
+                    // OS-13: render each param from the correct packed slot (number/string/form)
+                    // via GetParameterTypes, and surface the slot category so a consumer can tell
+                    // number-vs-form unambiguously. aliasRunOn = the QuestAlias run-on id (Unknown3).
+                    param1 = c.Data is IFunctionConditionDataGetter f2 ? RenderParam(f2, 1) : null,
+                    param2 = c.Data is IFunctionConditionDataGetter f3 ? RenderParam(f3, 2) : null,
+                    paramType1 = c.Data is IFunctionConditionDataGetter f4 ? RenderParamType(f4, 1) : null,
+                    paramType2 = c.Data is IFunctionConditionDataGetter f5 ? RenderParamType(f5, 2) : null,
+                    aliasRunOn = (c.Data as IFunctionConditionDataGetter)?.Unknown3,
                     cmp = $"{c.CompareOperator}",
                     val = c is IConditionFloatGetter cf ? (float?)cf.ComparisonValue : null,
                 }).ToList(),
@@ -754,6 +822,20 @@ if (hit is IMiscItemGetter mi)
     };
 }
 
+// KYWD detail (diag): workshop-menu category keywords carry a CNAM Color (+ Name); a custom build
+// category that won't render is usually a bare keyword missing the color the menu UI draws the button from.
+object? kywdDetail = null;
+if (hit is IKeywordGetter kw)
+{
+    var c = kw.Color;
+    kywdDetail = new
+    {
+        name = kw.Name?.String,
+        colorPresent = c is not null,
+        color = c is { } cc ? new { a = cc.A, r = cc.R, g = cc.G, b = cc.B } : null,
+    };
+}
+
 Console.Out.Write(JsonSerializer.Serialize(new
 {
     found = true,
@@ -761,6 +843,7 @@ Console.Out.Write(JsonSerializer.Serialize(new
     editorId = hit.EditorID,
     recordType,                          // Loqui name, e.g. "GlobalInt" — matches Spriggit MutagenObjectType
     misc = miscDetail,
+    kywd = kywdDetail,
 }));
 return 0;
 
@@ -955,6 +1038,18 @@ static int RunCreate(string[] argv)
         if (!SetParam(data, 1, cs.Param1, out err)) return false;
         if (!SetParam(data, 2, cs.Param2, out err)) return false;
         cond.Data = data;
+        return true;
+    }
+
+    // OS-02: build an ALCH/INGR magic Effect — a base MGEF FormLink + EffectData scalars.
+    static bool BuildEffect(EffectSpec es, out Effect effect, out string err)
+    {
+        effect = new Effect();
+        err = "";
+        if (string.IsNullOrWhiteSpace(es.BaseEffect)) { err = "effect missing baseEffect (MGEF FormKey)"; return false; }
+        if (!TryKey(es.BaseEffect, out var bk, out err)) return false;
+        effect.BaseEffect.SetTo(bk);
+        effect.Data = new EffectData { Magnitude = es.Magnitude, Area = es.Area, Duration = es.Duration };
         return true;
     }
 
@@ -1496,6 +1591,16 @@ static int RunCreate(string[] argv)
                 if (r.Packages is { Count: > 0 })
                     foreach (var pk in r.Packages)
                     { if (!TryKey(pk, out var pkk, out var e)) return Fail(e); npc.Packages.Add(new FormLink<IPackageGetter>(pkk)); }
+                // OS-14 — actor flags (Essential/Protected/Invulnerable/...). A quest-critical NPC
+                // without Essential/Protected can die before turn-in -> soft-lock. OR the named bits
+                // into npc.Flags (mirror the faction-flag accumulator at faction:2316).
+                if (r.NpcFlags is { Count: > 0 })
+                    foreach (var fn in r.NpcFlags)
+                    {
+                        if (!Enum.TryParse<Npc.Flag>(fn, true, out var nf))
+                            return Fail($"bad npc flag '{fn}' (Essential|Protected|Invulnerable|Unique|Respawn|Summonable|DoesNotBleed|IsGhost|...)");
+                        npc.Flags |= nf;
+                    }
                 formKey = npc.FormKey.ToString();
                 break;
             }
@@ -1559,6 +1664,84 @@ static int RunCreate(string[] argv)
                     armo.Race.SetTo(rk);
                 }
                 formKey = armo.FormKey.ToString();
+                break;
+            }
+            case "weapon":
+            {
+                // OS-01 — WEAP base record. Stats (DNAM) live DIRECTLY on the record (not a nested
+                // WeaponData like xEdit): BaseDamage/Capacity are UInt16; Speed/Reach/Min/MaxRange
+                // Single; Value UInt32. FormLinks: Ammo (AMMO), Attack/Equip sound (SNDR). Model +
+                // OBND + Keywords reuse the shared item idiom (book/misc). OMOD attach-mod authoring
+                // is a separate follow-up — AttachParentSlots just exposes the AKEY slot keywords.
+                var weap = mod.Weapons.AddNew(r.EditorId);
+                if (r.Name is { } n) weap.Name = n;
+                if (r.Value is { } val)
+                {
+                    if (val < 0) return Fail($"weapon value out of range: {val}");
+                    weap.Value = (uint)val;        // WEAP Value is UInt32 (Armor.Value is Int32)
+                }
+                if (r.Weight is { } wt)
+                {
+                    if (wt < 0) return Fail($"weapon weight out of range: {wt}");
+                    weap.Weight = wt;
+                }
+                if (r.BaseDamage is { } bd)
+                {
+                    if (bd < 0 || bd > ushort.MaxValue) return Fail($"baseDamage out of range (0-65535): {bd}");
+                    weap.BaseDamage = (ushort)bd;
+                }
+                if (r.Speed is { } sp) { if (sp < 0) return Fail($"weapon speed out of range: {sp}"); weap.Speed = sp; }
+                if (r.Reach is { } rch) { if (rch < 0) return Fail($"weapon reach out of range: {rch}"); weap.Reach = rch; }
+                if (r.MinRange is { } mnr) { if (mnr < 0) return Fail($"weapon minRange out of range: {mnr}"); weap.MinRange = mnr; }
+                if (r.MaxRange is { } mxr) { if (mxr < 0) return Fail($"weapon maxRange out of range: {mxr}"); weap.MaxRange = mxr; }
+                if (r.AmmoCapacity is { } cap)
+                {
+                    if (cap < 0 || cap > ushort.MaxValue) return Fail($"ammoCapacity out of range (0-65535): {cap}");
+                    weap.Capacity = (ushort)cap;
+                }
+                if (!string.IsNullOrWhiteSpace(r.Ammo))
+                { if (!TryKey(r.Ammo, out var k, out var e)) return Fail(e); weap.Ammo.SetTo(k); }
+                if (!string.IsNullOrWhiteSpace(r.AttackSound))
+                { if (!TryKey(r.AttackSound, out var k, out var e)) return Fail(e); weap.AttackSound.SetTo(k); }
+                if (!string.IsNullOrWhiteSpace(r.EquipSound))
+                { if (!TryKey(r.EquipSound, out var k, out var e)) return Fail(e); weap.EquipSound.SetTo(k); }
+                if (!string.IsNullOrWhiteSpace(r.AnimationType))
+                {
+                    if (!Enum.TryParse<Weapon.AnimationTypes>(r.AnimationType, true, out var at))
+                        return Fail($"bad animationType '{r.AnimationType}' (HandToHandMelee|OneHandSword|OneHandDagger|OneHandAxe|OneHandMace|TwoHandSword|TwoHandAxe|Bow|Staff|Gun|Grenade|Mine)");
+                    weap.AnimationType = at;
+                }
+                if (r.Keywords is { Count: > 0 })
+                {
+                    weap.Keywords ??= new();
+                    foreach (var kw in r.Keywords)
+                    { if (!TryKey(kw, out var kk, out var e)) return Fail(e); weap.Keywords.Add(new FormLink<IKeywordGetter>(kk)); }
+                }
+                if (r.AttachParentSlots is { Count: > 0 })
+                {
+                    weap.AttachParentSlots ??= new();
+                    foreach (var ap in r.AttachParentSlots)
+                    { if (!TryKey(ap, out var apk, out var e)) return Fail(e); weap.AttachParentSlots.Add(new FormLink<IKeywordGetter>(apk)); }
+                }
+                if (r.Model is { } wmdl)
+                {
+                    var m = new Model { File = wmdl };
+                    if (r.MaterialSwap is { } msw)
+                    {
+                        if (!TryKey(msw, out var mk, out var me)) return Fail(me);
+                        m.MaterialSwap.SetTo(mk);
+                    }
+                    weap.Model = m;
+                }
+                // OBND — a non-zero box so the Pip-Boy/Inspect preview frames the weapon (zero box =
+                // blank preview, same trap as MISC). Default = a generic rifle box; spec overrides.
+                {
+                    var ob = r.ObjectBounds ?? new short[] { -30, -5, -10, 30, 5, 10 };
+                    if (ob.Length != 6) return Fail($"objectBounds needs 6 ints [x1,y1,z1,x2,y2,z2], got {ob.Length}");
+                    weap.ObjectBounds.First = new Noggog.P3Int16(ob[0], ob[1], ob[2]);
+                    weap.ObjectBounds.Second = new Noggog.P3Int16(ob[3], ob[4], ob[5]);
+                }
+                formKey = weap.FormKey.ToString();
                 break;
             }
             case "quest":
@@ -1728,7 +1911,18 @@ static int RunCreate(string[] argv)
                         {
                             foreach (var resp in t.Responses)
                             {
-                                var info = new DialogResponses(mod);
+                                // OS-04: optionally pin the INFO FormKey so the TIF_<eid>_<8hex>
+                                // fragment-script name stays stable across re-authoring (else the
+                                // allocator mints a fresh ID and orphans the .pex).
+                                DialogResponses info;
+                                if (!string.IsNullOrWhiteSpace(resp.FormKey))
+                                {
+                                    if (!TryKey(resp.FormKey, out var ifk, out var ife)) return Fail(ife);
+                                    if (ifk.ModKey != mod.ModKey)
+                                        return Fail($"info formKey {resp.FormKey} is not in this mod's slot ({mod.ModKey})");
+                                    info = new DialogResponses(ifk, Fallout4Release.Fallout4);
+                                }
+                                else info = new DialogResponses(mod);
                                 if (resp.Prompt is { } p) info.Prompt = p;
                                 if (!string.IsNullOrWhiteSpace(resp.Speaker))
                                 {
@@ -1774,6 +1968,27 @@ static int RunCreate(string[] argv)
                                         OnBegin = (short)(sps.OnBegin ?? -1),
                                         OnEnd = (short)(sps.OnEnd ?? -1),
                                     };
+                                }
+                                // OS-04: TIF VMAD fragment — the line runs arbitrary Papyrus
+                                // (Fragment_Begin/Fragment_End). Mirrors the quest stage-fragment
+                                // path (DialogResponsesAdapter Version 6 / ObjectFormat 2, the
+                                // single fragment script in ScriptFragments.Script, OnBegin/OnEnd
+                                // ScriptFragment pointing into it). The .pex is decoupled
+                                // (fo4_papyrus_build / Caprica) — metadata only, like QUST.
+                                if (resp.Fragment is { } infoFrag)
+                                {
+                                    if (string.IsNullOrWhiteSpace(infoFrag.ScriptName)) return Fail("info fragment missing scriptName");
+                                    if (infoFrag.OnBegin is null && infoFrag.OnEnd is null)
+                                        return Fail("info fragment needs at least one of onBegin/onEnd");
+                                    if (!BuildScriptEntry(infoFrag.ScriptName, infoFrag.Flags, infoFrag.Properties, out var fragScript, out var fe))
+                                        return Fail(fe);
+                                    var adapter = new DialogResponsesAdapter { Version = 6, ObjectFormat = 2 };
+                                    adapter.ScriptFragments = new ScriptFragments { Script = fragScript };
+                                    if (infoFrag.OnBegin is { } ob)
+                                        adapter.ScriptFragments.OnBegin = new ScriptFragment { ScriptName = infoFrag.ScriptName, FragmentName = ob };
+                                    if (infoFrag.OnEnd is { } oe)
+                                        adapter.ScriptFragments.OnEnd = new ScriptFragment { ScriptName = infoFrag.ScriptName, FragmentName = oe };
+                                    info.VirtualMachineAdapter = adapter;
                                 }
                                 topic.Responses.Add(info);
                             }
@@ -2084,6 +2299,20 @@ static int RunCreate(string[] argv)
                 // TypeEnum surface, not glue-MVP).
                 var kywd = mod.Keywords.AddNew(r.EditorId);
                 if (r.Name is { } n) kywd.Name = n;
+                // CNAM Color — REQUIRED for a workshop-build-menu category keyword: the menu UI draws
+                // the category button from the keyword's color, so a bare (colorless) keyword never
+                // renders as a category. [r,g,b] (alpha defaults to vanilla's 0) or [a,r,g,b].
+                if (r.Color is { } col)
+                {
+                    if (col.Length == 3) kywd.Color = System.Drawing.Color.FromArgb(0, col[0], col[1], col[2]);
+                    else if (col.Length == 4) kywd.Color = System.Drawing.Color.FromArgb(col[0], col[1], col[2], col[3]);
+                    else return Fail("keyword color needs [r,g,b] or [a,r,g,b]");
+                }
+                // TNAM Type — REQUIRED for a workshop-build-menu filter keyword. The build-menu UI only
+                // traverses keywords whose Type == RecipeFilter (9); a typeless keyword loads (help finds
+                // it) but is invisible to the menu, so the category never renders. Vanilla + BuildingBlocks
+                // filter keywords are all Type=9. Plain (non-menu) keywords leave this null.
+                if (r.KeywordType is { } kt) kywd.Type = (Keyword.TypeEnum)kt;
                 formKey = kywd.FormKey.ToString();
                 break;
             }
@@ -2106,15 +2335,71 @@ static int RunCreate(string[] argv)
                 formKey = flst.FormKey.ToString();
                 break;
             }
+            case "flstoverride":
+            {
+                // Menu/category wiring — override an EXISTING (master) FLST to ADD items (e.g. graft a
+                // custom workshop-build category into the vanilla WorkshopMenuMain so a modded recipe
+                // shows under your OWN menu node). Mirrors leveleditemoverride: load sourcePlugin, find
+                // the FLST by FormKey, DeepCopy (FormKey preserved -> true override, vanilla items carry
+                // forward), then ADD the new item FormLinks. Additive; clearExisting is the opt-in footgun.
+                if (string.IsNullOrWhiteSpace(r.SourcePlugin)) return Fail("flstOverride missing sourcePlugin");
+                if (string.IsNullOrWhiteSpace(r.Target)) return Fail("flstOverride missing target (FLST FormKey)");
+                if (!TryKey(r.Target, out var floKey, out var floe)) return Fail(floe);
+                if (!sourceCache.TryGetValue(r.SourcePlugin, out var srcFlstMod))
+                {
+                    if (!File.Exists(r.SourcePlugin)) return Fail($"sourcePlugin not found: {r.SourcePlugin}");
+                    try { srcFlstMod = Fallout4Mod.CreateFromBinaryOverlay(new ModPath(r.SourcePlugin), Fallout4Release.Fallout4); }
+                    catch (Exception e) { return Fail($"sourcePlugin load error: {e.Message}"); }
+                    sourceCache[r.SourcePlugin] = srcFlstMod;
+                }
+                var srcFlst = srcFlstMod.FormLists.FirstOrDefault(x => x.FormKey == floKey);
+                if (srcFlst is null) return Fail($"FLST {r.Target} not found in {Path.GetFileName(r.SourcePlugin)}");
+                var floOvl = srcFlst.DeepCopy();
+                if (r.ClearExisting ?? false) floOvl.Items.Clear();
+                if (r.Items is { Count: > 0 })
+                {
+                    // Workshop build menus cap how many categories render; appended-past-the-cap items are
+                    // silently dropped. insertAt grafts new items near the front (BuildingBlocks inserts its
+                    // category at index 1) so a custom category stays within the visible cap. null = append.
+                    int insAt = r.InsertAt ?? floOvl.Items.Count;
+                    if (insAt < 0 || insAt > floOvl.Items.Count) return Fail($"insertAt {insAt} out of range 0..{floOvl.Items.Count}");
+                    foreach (var it in r.Items)
+                    {
+                        if (!TryKey(it, out var ik, out var ie)) return Fail(ie);
+                        floOvl.Items.Insert(insAt++, new FormLink<IFallout4MajorRecordGetter>(ik));
+                    }
+                }
+                mod.FormLists.RecordCache.Add(floOvl);
+                formKey = floOvl.FormKey.ToString();
+                break;
+            }
             case "message":
             {
-                // MESG MVP = editorId + text (Description, the body) + optional title
-                // (Name). Message is concrete (AddNew like armor:390); both fields are
-                // TranslatedStrings assigned from a plain string (implicit, like armo.Name).
-                // MenuButtons/Conditions/OwnerQuest/Flags/DisplayTime deferred.
+                // MESG = editorId + text (Description, the body) + optional title (Name).
+                // Message is concrete (AddNew like armor:390); both fields are TranslatedStrings
+                // assigned from a plain string (implicit, like armo.Name). OS-11: + MenuButtons
+                // (choice dialogs; needs the MessageBox flag to render) + Flags (Message.Flag).
+                // OwnerQuest/DisplayTime still deferred.
                 var mesg = mod.Messages.AddNew(r.EditorId);
                 if (r.Text is { } body) mesg.Description = body;
                 if (r.Name is { } title) mesg.Name = title;
+                if (r.Flags is { Count: > 0 })
+                    foreach (var fn in r.Flags)
+                    {
+                        if (!Enum.TryParse<Message.Flag>(fn, true, out var mf))
+                            return Fail($"bad message flag '{fn}' (MessageBox|DelayInitialDisplay)");
+                        mesg.Flags |= mf;
+                    }
+                if (r.MenuButtons is { Count: > 0 })
+                    foreach (var b in r.MenuButtons)
+                    {
+                        var btn = new MessageButton();
+                        if (b.Text is { } bt) btn.Text = bt;
+                        if (b.Conditions is { Count: > 0 })
+                            foreach (var cs in b.Conditions)
+                            { if (!BuildCondition(cs, out var cond, out var ce)) return Fail(ce); btn.Conditions.Add(cond); }
+                        mesg.MenuButtons.Add(btn);
+                    }
                 formKey = mesg.FormKey.ToString();
                 break;
             }
@@ -2252,6 +2537,54 @@ static int RunCreate(string[] argv)
                 formKey = mswp.FormKey.ToString();
                 break;
             }
+            case "constructibleobject":
+            case "cobj":
+            {
+                // OS-08 — COBJ crafting recipe. createdObject (the output, REQUIRED) + workbenchKeyword
+                // (the bench it shows at, REQUIRED) + components (ingredient FormLinks + counts) +
+                // categories (workshop-menu filter KYWDs — NOT an FLST) + conditions (HasPerk/
+                // GetItemCount gates, reuses BuildCondition). OMOD attach-mods are a separate gate.
+                var cobj = mod.ConstructibleObjects.AddNew(r.EditorId);
+                if (string.IsNullOrWhiteSpace(r.CreatedObject))
+                    return Fail("constructibleObject needs 'createdObject' (the recipe output FormKey)");
+                if (!TryKey(r.CreatedObject, out var cok, out var coe)) return Fail(coe);
+                cobj.CreatedObject.SetTo(cok);
+                if (string.IsNullOrWhiteSpace(r.WorkbenchKeyword))
+                    return Fail("constructibleObject needs 'workbenchKeyword' (the bench-type FormKey)");
+                if (!TryKey(r.WorkbenchKeyword, out var wbk, out var wbe)) return Fail(wbe);
+                cobj.WorkbenchKeyword.SetTo(wbk);
+                {
+                    var count = r.CreatedObjectCount ?? 1;
+                    if (count < 0 || count > ushort.MaxValue) return Fail($"createdObjectCount out of range (0-65535): {count}");
+                    cobj.CreatedObjectCounts ??= new();
+                    cobj.CreatedObjectCounts.Add(new ConstructibleCreatedObjectCount { Count = (ushort)count, Priority = 0 });
+                }
+                if (!string.IsNullOrWhiteSpace(r.MenuArtObject))
+                { if (!TryKey(r.MenuArtObject, out var mak, out var mae)) return Fail(mae); cobj.MenuArtObject.SetTo(mak); }
+                if (r.Components is { Count: > 0 })
+                {
+                    cobj.Components ??= new();
+                    foreach (var c in r.Components)
+                    {
+                        if (c.Count < 0) return Fail($"component count out of range: {c.Count}");
+                        if (!TryKey(c.Component, out var ck, out var ce)) return Fail(ce);
+                        var comp = new ConstructibleObjectComponent { Count = (uint)c.Count };
+                        comp.Component.SetTo(ck);
+                        cobj.Components.Add(comp);
+                    }
+                }
+                if (r.Categories is { Count: > 0 })
+                {
+                    cobj.Categories ??= new();
+                    foreach (var cat in r.Categories)
+                    { if (!TryKey(cat, out var catk, out var cate)) return Fail(cate); cobj.Categories.Add(new FormLink<IKeywordGetter>(catk)); }
+                }
+                if (r.Conditions is { Count: > 0 })
+                    foreach (var cs in r.Conditions)
+                    { if (!BuildCondition(cs, out var cond, out var cce)) return Fail(cce); cobj.Conditions.Add(cond); }
+                formKey = cobj.FormKey.ToString();
+                break;
+            }
             case "global":
             {
                 // GLOB: Global is ABSTRACT, so AddNew (an IMajorRecord-constrained factory
@@ -2330,6 +2663,37 @@ static int RunCreate(string[] argv)
                         fact.Relations.Add(rel);
                     }
                 }
+                // OS-11: Ranks (member titles, gendered) + VendorValues (merchant data). CrimeValues
+                // still deferred.
+                if (r.Ranks is { Count: > 0 })
+                    foreach (var rk in r.Ranks)
+                    {
+                        var rank = new Rank();
+                        if (rk.Number is { } num)
+                        {
+                            if (num < 0) return Fail($"rank number out of range: {num}");
+                            rank.Number = (uint)num;
+                        }
+                        if (rk.Title is { } t)
+                            rank.Title = new Mutagen.Bethesda.Plugins.Records.GenderedItem<Mutagen.Bethesda.Strings.TranslatedString>(t, rk.TitleFemale ?? t);
+                        if (rk.Insignia is { } ins) rank.Insignia = ins;
+                        fact.Ranks.Add(rank);
+                    }
+                if (r.VendorValues is { } vv)
+                {
+                    if (vv.StartHour < 0 || vv.StartHour > ushort.MaxValue) return Fail($"vendorValues.startHour out of range (0-65535): {vv.StartHour}");
+                    if (vv.EndHour < 0 || vv.EndHour > ushort.MaxValue) return Fail($"vendorValues.endHour out of range (0-65535): {vv.EndHour}");
+                    if (vv.Radius < 0 || vv.Radius > ushort.MaxValue) return Fail($"vendorValues.radius out of range (0-65535): {vv.Radius}");
+                    fact.VendorValues = new VendorValues
+                    {
+                        StartHour = (ushort)vv.StartHour,
+                        EndHour = (ushort)vv.EndHour,
+                        Radius = (ushort)vv.Radius,
+                        BuysStolenItems = vv.BuysStolen,
+                        BuysNonStolenItems = vv.BuysNonStolen,
+                        BuySellEverythingNotInList = vv.BuyEverything,
+                    };
+                }
                 formKey = fact.FormKey.ToString();
                 break;
             }
@@ -2348,6 +2712,12 @@ static int RunCreate(string[] argv)
                             return Fail($"bad leveledNpc flag '{fn}' (CalculateFromAllLevelsLessThanOrEqualPlayer|CalculateForEachItemInCount|CalculateAll)");
                         lvln.Flags |= fl;
                     }
+                }
+                // OS-11: chance the whole list yields nothing (authored 0-100 int -> Percent fraction).
+                if (r.ChanceNone is { } cn)
+                {
+                    if (cn < 0 || cn > 100) return Fail($"chanceNone out of range (0-100): {cn}");
+                    lvln.ChanceNone = new Noggog.Percent(cn / 100.0);
                 }
                 if (r.Entries is { Count: > 0 })
                 {
@@ -2378,6 +2748,13 @@ static int RunCreate(string[] argv)
                             return Fail($"bad leveledItem flag '{fn}' (CalculateFromAllLevelsLessThanOrEqualPlayer|CalculateForEachItemInCount|UseAll)");
                         lvli.Flags |= fl;
                     }
+                }
+                // OS-11: chanceNone (loot tuning — chance the list yields nothing; the coupon
+                // "as-extra not-replace" lever). Authored as 0-100 int -> Noggog.Percent fraction.
+                if (r.ChanceNone is { } cn)
+                {
+                    if (cn < 0 || cn > 100) return Fail($"chanceNone out of range (0-100): {cn}");
+                    lvli.ChanceNone = new Noggog.Percent(cn / 100.0);
                 }
                 if (r.Entries is { Count: > 0 })
                 {
@@ -2581,15 +2958,185 @@ static int RunCreate(string[] argv)
                 formKey = node.FormKey.ToString();
                 break;
             }
+            case "note":
+            case "holotape":
+            {
+                // OS-15 NOTE/Holotape (rewritten 2026-11-24 after the original was lost). Item fields
+                // reuse the shared ones; the payload is the Data union picked by holotapeType:
+                // sound -> HolotapeSound.Sound (SNDR), voice -> HolotapeVoice.Scene (SCEN),
+                // program -> HolotapeProgram.File (.swf), terminal -> HolotapeTerminal.Terminal (TERM).
+                var holo = mod.Holotapes.AddNew(r.EditorId);
+                if (r.Name is { } n) holo.Name = n;
+                if (r.Model is { } hmdl)
+                {
+                    var m = new Model { File = hmdl };
+                    if (r.MaterialSwap is { } msw)
+                    { if (!TryKey(msw, out var mk, out var me)) return Fail(me); m.MaterialSwap.SetTo(mk); }
+                    holo.Model = m;
+                }
+                if (r.Value is { } hv)
+                {
+                    if (hv < 0) return Fail($"holotape value must be >= 0, got {hv}");
+                    holo.Value = (uint)hv;
+                }
+                if (r.Weight is { } hw)
+                {
+                    if (hw < 0) return Fail($"holotape weight must be >= 0, got {hw}");
+                    holo.Weight = hw;
+                }
+                if (r.ObjectBounds is { } hob)
+                {
+                    if (hob.Length != 6) return Fail($"objectBounds needs 6 ints [x1,y1,z1,x2,y2,z2], got {hob.Length}");
+                    holo.ObjectBounds = new ObjectBounds   // nullable on Holotape (optional OBND)
+                    {
+                        First = new Noggog.P3Int16(hob[0], hob[1], hob[2]),
+                        Second = new Noggog.P3Int16(hob[3], hob[4], hob[5]),
+                    };
+                }
+                switch ((r.HolotapeType ?? "").Trim().ToLowerInvariant())
+                {
+                    case "sound":
+                    {
+                        if (string.IsNullOrWhiteSpace(r.Sound)) return Fail("holotapeType=sound needs 'sound' (SNDR FormKey)");
+                        if (!TryKey(r.Sound, out var sk, out var se)) return Fail(se);
+                        var d = new HolotapeSound(); d.Sound.SetTo(sk); holo.Data = d;
+                        break;
+                    }
+                    case "voice":
+                    {
+                        if (string.IsNullOrWhiteSpace(r.Scene)) return Fail("holotapeType=voice needs 'scene' (SCEN FormKey)");
+                        if (!TryKey(r.Scene, out var sk, out var se)) return Fail(se);
+                        var d = new HolotapeVoice(); d.Scene.SetTo(sk); holo.Data = d;
+                        break;
+                    }
+                    case "program":
+                        if (string.IsNullOrWhiteSpace(r.ProgramFile)) return Fail("holotapeType=program needs 'programFile' (.swf path)");
+                        holo.Data = new HolotapeProgram { File = r.ProgramFile };
+                        break;
+                    case "terminal":
+                    {
+                        if (string.IsNullOrWhiteSpace(r.TerminalLink)) return Fail("holotapeType=terminal needs 'terminalLink' (TERM FormKey)");
+                        if (!TryKey(r.TerminalLink, out var tk, out var te)) return Fail(te);
+                        var d = new HolotapeTerminal(); d.Terminal.SetTo(tk); holo.Data = d;
+                        break;
+                    }
+                    default:
+                        return Fail($"holotape needs holotapeType sound|voice|program|terminal, got '{r.HolotapeType}'");
+                }
+                formKey = holo.FormKey.ToString();
+                break;
+            }
+            case "terminal":
+            case "term":
+            {
+                // OS-15 TERM — readable info terminal: header banner + WelcomeText (spec `text`) +
+                // static body paragraphs. Submenu navigation (MenuItems) is not authored.
+                var term = mod.Terminals.AddNew(r.EditorId);
+                if (r.Name is { } n) term.Name = n;
+                if (r.HeaderText is { } hdr) term.HeaderText = hdr;
+                if (r.Text is { } wtxt) term.WelcomeText = wtxt;
+                if (r.Model is { } tmdl)
+                {
+                    var m = new Model { File = tmdl };
+                    if (r.MaterialSwap is { } msw)
+                    { if (!TryKey(msw, out var mk, out var me)) return Fail(me); m.MaterialSwap.SetTo(mk); }
+                    term.Model = m;
+                }
+                if (r.BodyTexts is { Count: > 0 })
+                {
+                    term.BodyTexts ??= new();
+                    foreach (var bt in r.BodyTexts) term.BodyTexts.Add(new TerminalBodyText { Text = bt });
+                }
+                if (r.ObjectBounds is { } tob)
+                {
+                    if (tob.Length != 6) return Fail($"objectBounds needs 6 ints [x1,y1,z1,x2,y2,z2], got {tob.Length}");
+                    term.ObjectBounds.First = new Noggog.P3Int16(tob[0], tob[1], tob[2]);
+                    term.ObjectBounds.Second = new Noggog.P3Int16(tob[3], tob[4], tob[5]);
+                }
+                formKey = term.FormKey.ToString();
+                break;
+            }
+            case "smen":
+            {
+                // OS-15 Story Manager Event Node — a new event listener (Type = what it listens for).
+                var ev = mod.StoryManagerEventNodes.AddNew(r.EditorId);
+                if (string.IsNullOrWhiteSpace(r.EventType)) return Fail("smen needs eventType (StoryManagerEventNode.Types name)");
+                if (!Enum.TryParse<StoryManagerEventNode.Types>(r.EventType.Trim(), true, out var et))
+                    return Fail($"bad smen eventType '{r.EventType}'");
+                ev.Type = et;
+                if (!string.IsNullOrWhiteSpace(r.Parent))
+                { if (!TryKey(r.Parent, out var k, out var e)) return Fail(e); ev.Parent.SetTo(k); }
+                if (!string.IsNullOrWhiteSpace(r.PreviousSibling))
+                { if (!TryKey(r.PreviousSibling, out var k, out var e)) return Fail(e); ev.PreviousSibling.SetTo(k); }
+                if (r.Flags is { Count: > 0 })
+                    foreach (var fn in r.Flags)
+                    {
+                        if (!Enum.TryParse<AStoryManagerNode.Flag>(fn, true, out var fl))
+                            return Fail($"bad smen flag '{fn}' (Random|WarnIfNoChildQuestStarted)");
+                        ev.Flags = (ev.Flags ?? 0) | fl;
+                    }
+                if (r.MaxConcurrentQuests is { } emc)
+                {
+                    if (emc < 0) return Fail($"maxConcurrentQuests out of range: {emc}");
+                    ev.MaxConcurrentQuests = (uint)emc;
+                }
+                if (r.Conditions is { Count: > 0 })
+                    foreach (var cs in r.Conditions)
+                    { if (!BuildCondition(cs, out var cond, out var ce)) return Fail(ce); ev.Conditions.Add(cond); }
+                formKey = ev.FormKey.ToString();
+                break;
+            }
+            case "smbn":
+            {
+                // OS-15 Story Manager Branch Node — flag/condition grouping node, no event.
+                var br = mod.StoryManagerBranchNodes.AddNew(r.EditorId);
+                if (!string.IsNullOrWhiteSpace(r.Parent))
+                { if (!TryKey(r.Parent, out var k, out var e)) return Fail(e); br.Parent.SetTo(k); }
+                if (!string.IsNullOrWhiteSpace(r.PreviousSibling))
+                { if (!TryKey(r.PreviousSibling, out var k, out var e)) return Fail(e); br.PreviousSibling.SetTo(k); }
+                if (r.Flags is { Count: > 0 })
+                    foreach (var fn in r.Flags)
+                    {
+                        if (!Enum.TryParse<AStoryManagerNode.Flag>(fn, true, out var fl))
+                            return Fail($"bad smbn flag '{fn}' (Random|WarnIfNoChildQuestStarted)");
+                        br.Flags = (br.Flags ?? 0) | fl;
+                    }
+                if (r.MaxConcurrentQuests is { } bmc)
+                {
+                    if (bmc < 0) return Fail($"maxConcurrentQuests out of range: {bmc}");
+                    br.MaxConcurrentQuests = (uint)bmc;
+                }
+                if (r.Conditions is { Count: > 0 })
+                    foreach (var cs in r.Conditions)
+                    { if (!BuildCondition(cs, out var cond, out var ce)) return Fail(ce); br.Conditions.Add(cond); }
+                formKey = br.FormKey.ToString();
+                break;
+            }
             case "activator":
             {
                 // W6.5 — ACTI base record (script-bound trigger / interactable). name + keywords +
                 // VMAD control-script binding (W6.5-gap, 2026-06-21): `scripts[]` attaches a compiled
                 // Papyrus control script (by .psc class name) with typed properties — the .pex is
                 // compiled separately (fo4_papyrus_build / Caprica), this writes the VMAD metadata
-                // (Version 6 / ObjectFormat 2, what CK writes). Model mesh deferred.
+                // (Version 6 / ObjectFormat 2, what CK writes).
+                // Model(+MSWP) + OBND (2026-06-26, rewritten 2026-11-24 after the original was lost):
+                // a scripted workshop ACTI (coupon showcase board) needs a world mesh + placement
+                // bounds — same shape as STAT below.
                 var acti = mod.Activators.AddNew(r.EditorId);
                 if (r.Name is { } n) acti.Name = n;
+                if (r.Model is { } amdl)
+                {
+                    var m = new Model { File = amdl };
+                    if (r.MaterialSwap is { } msw)
+                    { if (!TryKey(msw, out var mk, out var me)) return Fail(me); m.MaterialSwap.SetTo(mk); }
+                    acti.Model = m;
+                }
+                if (r.ObjectBounds is { } aob)
+                {
+                    if (aob.Length != 6) return Fail($"objectBounds needs 6 ints [x1,y1,z1,x2,y2,z2], got {aob.Length}");
+                    acti.ObjectBounds.First = new Noggog.P3Int16(aob[0], aob[1], aob[2]);
+                    acti.ObjectBounds.Second = new Noggog.P3Int16(aob[3], aob[4], aob[5]);
+                }
                 if (r.Keywords is { Count: > 0 })
                 {
                     acti.Keywords ??= new();
@@ -2607,6 +3154,208 @@ static int RunCreate(string[] argv)
                     }
                 }
                 formKey = acti.FormKey.ToString();
+                break;
+            }
+            case "outfit":
+            {
+                // OS-14 — OTFT outfit: a list of worn items (ARMO/LVLI/NPC_ via IOutfitTarget).
+                // An NPC's defaultOutfit points here; AddNew + Items (reuses the FormList Items
+                // field — both are bare FormLink lists). Concrete record -> AddNew (like book:2130).
+                var otft = mod.Outfits.AddNew(r.EditorId);
+                if (r.Items is { Count: > 0 })
+                {
+                    otft.Items ??= new();
+                    foreach (var it in r.Items)
+                    { if (!TryKey(it, out var ik, out var e)) return Fail(e); otft.Items.Add(new FormLink<IOutfitTargetGetter>(ik)); }
+                }
+                formKey = otft.FormKey.ToString();
+                break;
+            }
+            case "static":
+            {
+                // OS-02 — STAT: a static collection prop (settlement clutter). Name + Model(+MSWP) +
+                // OBND. No keywords/flags MVP (the bare prop fields). Concrete -> AddNew.
+                var st = mod.Statics.AddNew(r.EditorId);
+                if (r.Name is { } n) st.Name = n;
+                if (r.Model is { } mdl)
+                {
+                    var m = new Model { File = mdl };
+                    if (r.MaterialSwap is { } msw)
+                    { if (!TryKey(msw, out var mk, out var me)) return Fail(me); m.MaterialSwap.SetTo(mk); }
+                    st.Model = m;
+                }
+                if (r.ObjectBounds is { } ob)
+                {
+                    if (ob.Length != 6) return Fail($"objectBounds needs 6 ints [x1,y1,z1,x2,y2,z2], got {ob.Length}");
+                    st.ObjectBounds.First = new Noggog.P3Int16(ob[0], ob[1], ob[2]);
+                    st.ObjectBounds.Second = new Noggog.P3Int16(ob[3], ob[4], ob[5]);
+                }
+                formKey = st.FormKey.ToString();
+                break;
+            }
+            case "door":
+            {
+                // OS-02 — DOOR: Name + Model(+MSWP) + Keywords + Flags (Door.Flag). Concrete -> AddNew.
+                var door = mod.Doors.AddNew(r.EditorId);
+                if (r.Name is { } n) door.Name = n;
+                if (r.Model is { } mdl)
+                {
+                    var m = new Model { File = mdl };
+                    if (r.MaterialSwap is { } msw)
+                    { if (!TryKey(msw, out var mk, out var me)) return Fail(me); m.MaterialSwap.SetTo(mk); }
+                    door.Model = m;
+                }
+                if (r.Keywords is { Count: > 0 })
+                {
+                    door.Keywords ??= new();
+                    foreach (var kw in r.Keywords)
+                    { if (!TryKey(kw, out var kk, out var e)) return Fail(e); door.Keywords.Add(new FormLink<IKeywordGetter>(kk)); }
+                }
+                if (r.Flags is { Count: > 0 })
+                    foreach (var fn in r.Flags)
+                    {
+                        if (!Enum.TryParse<Door.Flag>(fn, true, out var fl))
+                            return Fail($"bad door flag '{fn}' (Automatic|Hidden|MinimalUse|Sliding|DoNotOpenInCombatSearch|NoToText)");
+                        door.Flags |= fl;
+                    }
+                formKey = door.FormKey.ToString();
+                break;
+            }
+            case "light":
+            {
+                // OS-02 — LIGH: Name + Model(+MSWP) + Keywords + Value/Weight + Radius + Flags
+                // (Light.Flag). Color (System.Drawing.Color) deferred MVP. Concrete -> AddNew.
+                var ligh = mod.Lights.AddNew(r.EditorId);
+                if (r.Name is { } n) ligh.Name = n;
+                if (r.Model is { } mdl)
+                {
+                    var m = new Model { File = mdl };
+                    if (r.MaterialSwap is { } msw)
+                    { if (!TryKey(msw, out var mk, out var me)) return Fail(me); m.MaterialSwap.SetTo(mk); }
+                    ligh.Model = m;
+                }
+                if (r.Keywords is { Count: > 0 })
+                {
+                    ligh.Keywords ??= new();
+                    foreach (var kw in r.Keywords)
+                    { if (!TryKey(kw, out var kk, out var e)) return Fail(e); ligh.Keywords.Add(new FormLink<IKeywordGetter>(kk)); }
+                }
+                if (r.Value is { } val) { if (val < 0) return Fail($"light value out of range: {val}"); ligh.Value = (uint)val; }
+                if (r.Weight is { } wt) { if (wt < 0) return Fail($"light weight out of range: {wt}"); ligh.Weight = wt; }
+                if (r.Radius is { } rad) { if (rad < 0) return Fail($"light radius out of range: {rad}"); ligh.Radius = (uint)rad; }
+                if (r.Flags is { Count: > 0 })
+                    foreach (var fn in r.Flags)
+                    {
+                        if (!Enum.TryParse<Light.Flag>(fn, true, out var fl))
+                            return Fail($"bad light flag '{fn}' (CanBeCarried|Flicker|OffByDefault|Pulse|...)");
+                        ligh.Flags |= fl;
+                    }
+                formKey = ligh.FormKey.ToString();
+                break;
+            }
+            case "container":
+            {
+                // OS-02 — CONT: a loot stash. Name + Model(+MSWP) + Keywords + Flags (Container.Flag) +
+                // Items (reuses the NPC ContainerEntry/ContainerItem inventory idiom). Concrete -> AddNew.
+                var cont = mod.Containers.AddNew(r.EditorId);
+                if (r.Name is { } n) cont.Name = n;
+                if (r.Model is { } mdl)
+                {
+                    var m = new Model { File = mdl };
+                    if (r.MaterialSwap is { } msw)
+                    { if (!TryKey(msw, out var mk, out var me)) return Fail(me); m.MaterialSwap.SetTo(mk); }
+                    cont.Model = m;
+                }
+                if (r.Keywords is { Count: > 0 })
+                {
+                    cont.Keywords ??= new();
+                    foreach (var kw in r.Keywords)
+                    { if (!TryKey(kw, out var kk, out var e)) return Fail(e); cont.Keywords.Add(new FormLink<IKeywordGetter>(kk)); }
+                }
+                if (r.Flags is { Count: > 0 })
+                    foreach (var fn in r.Flags)
+                    {
+                        if (!Enum.TryParse<Container.Flag>(fn, true, out var fl))
+                            return Fail($"bad container flag '{fn}' (AllowSoundsWhenAnimation|Respawns|ShowOwner)");
+                        cont.Flags |= fl;
+                    }
+                if (r.Inventory is { Count: > 0 })
+                {
+                    cont.Items ??= new();
+                    foreach (var it in r.Inventory)
+                    {
+                        if (it.Count < 0) return Fail($"container item count out of range: {it.Count}");
+                        if (!TryKey(it.Item, out var ik, out var e)) return Fail(e);
+                        var entry = new ContainerEntry { Item = new ContainerItem { Count = it.Count } };
+                        entry.Item.Item.SetTo(ik);
+                        cont.Items.Add(entry);
+                    }
+                }
+                formKey = cont.FormKey.ToString();
+                break;
+            }
+            case "ingestible":
+            case "ingredient":
+            {
+                // OS-02 — ALCH (ingestible: chem/food/stimpak) / INGR (ingredient). Both carry
+                // Name + Model(+MSWP) + Keywords + Value/Weight + Effects (the magic-effect list).
+                // ALCH also takes Flags (Ingestible.Flag); INGR's Value is Int32 vs ALCH's UInt32.
+                bool isAlch = r.Type!.Trim().ToLowerInvariant() == "ingestible";
+                if (isAlch)
+                {
+                    var alch = mod.Ingestibles.AddNew(r.EditorId);
+                    if (r.Name is { } n) alch.Name = n;
+                    if (r.Model is { } mdl)
+                    {
+                        var m = new Model { File = mdl };
+                        if (r.MaterialSwap is { } msw)
+                        { if (!TryKey(msw, out var mk, out var me)) return Fail(me); m.MaterialSwap.SetTo(mk); }
+                        alch.Model = m;
+                    }
+                    if (r.Keywords is { Count: > 0 })
+                    {
+                        alch.Keywords ??= new();
+                        foreach (var kw in r.Keywords)
+                        { if (!TryKey(kw, out var kk, out var e)) return Fail(e); alch.Keywords.Add(new FormLink<IKeywordGetter>(kk)); }
+                    }
+                    if (r.Value is { } val) { if (val < 0) return Fail($"ingestible value out of range: {val}"); alch.Value = (uint)val; }
+                    if (r.Weight is { } wt) { if (wt < 0) return Fail($"ingestible weight out of range: {wt}"); alch.Weight = wt; }
+                    if (r.Flags is { Count: > 0 })
+                        foreach (var fn in r.Flags)
+                        {
+                            if (!Enum.TryParse<Ingestible.Flag>(fn, true, out var fl))
+                                return Fail($"bad ingestible flag '{fn}' (NoAutoCalc|FoodItem|Medicine|Poison)");
+                            alch.Flags |= fl;
+                        }
+                    if (r.Effects is { Count: > 0 })
+                        foreach (var es in r.Effects)
+                        { if (!BuildEffect(es, out var ef, out var ee)) return Fail(ee); alch.Effects.Add(ef); }
+                    formKey = alch.FormKey.ToString();
+                }
+                else
+                {
+                    var ingr = mod.Ingredients.AddNew(r.EditorId);
+                    if (r.Name is { } n) ingr.Name = n;
+                    if (r.Model is { } mdl)
+                    {
+                        var m = new Model { File = mdl };
+                        if (r.MaterialSwap is { } msw)
+                        { if (!TryKey(msw, out var mk, out var me)) return Fail(me); m.MaterialSwap.SetTo(mk); }
+                        ingr.Model = m;
+                    }
+                    if (r.Keywords is { Count: > 0 })
+                    {
+                        ingr.Keywords ??= new();
+                        foreach (var kw in r.Keywords)
+                        { if (!TryKey(kw, out var kk, out var e)) return Fail(e); ingr.Keywords.Add(new FormLink<IKeywordGetter>(kk)); }
+                    }
+                    if (r.Value is { } val) { if (val < 0) return Fail($"ingredient value out of range: {val}"); ingr.Value = val; }
+                    if (r.Weight is { } wt) { if (wt < 0) return Fail($"ingredient weight out of range: {wt}"); ingr.Weight = wt; }
+                    if (r.Effects is { Count: > 0 })
+                        foreach (var es in r.Effects)
+                        { if (!BuildEffect(es, out var ef, out var ee)) return Fail(ee); ingr.Effects.Add(ef); }
+                    formKey = ingr.FormKey.ToString();
+                }
                 break;
             }
             case "location":
@@ -2772,6 +3521,8 @@ static int RunCreate(string[] argv)
                 // as the number, so the int is the authoritative read-back).
                 ["defaultTemplate"] = g.DefaultTemplate.FormKeyNullable?.ToString(),
                 ["useTemplateActors"] = (int)g.UseTemplateActors,
+                // OS-14: raw actor-flags bitfield (Essential=2|Protected=256|...) — byte-exact proof.
+                ["flags"] = (int)g.Flags,
             };
         foreach (var g in check.Armors)
             back[g.FormKey.ToString()] = new Dictionary<string, object?>
@@ -2786,6 +3537,27 @@ static int RunCreate(string[] argv)
                 // Kerem-polish: armature link count + race — the worn-mesh chain (0 = invisible armor).
                 ["armatureCount"] = g.Armatures?.Count ?? 0,
                 ["race"] = g.Race.FormKeyNullable?.ToString(),
+            };
+        // OS-01 WEAP: DNAM stats + FormLinks + keyword/attach-slot/model round-trip proof.
+        foreach (var g in check.Weapons)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["name"] = g.Name?.String,
+                ["value"] = (int)g.Value,
+                ["weight"] = g.Weight,
+                ["baseDamage"] = (int)g.BaseDamage,
+                ["speed"] = g.Speed,
+                ["reach"] = g.Reach,
+                ["minRange"] = g.MinRange,
+                ["maxRange"] = g.MaxRange,
+                ["ammoCapacity"] = (int)g.Capacity,
+                ["ammo"] = g.Ammo.FormKeyNullable?.ToString(),
+                ["attackSound"] = g.AttackSound.FormKeyNullable?.ToString(),
+                ["equipSound"] = g.EquipSound.FormKeyNullable?.ToString(),
+                ["animationType"] = g.AnimationType.ToString(),
+                ["keywordCount"] = g.Keywords?.Count ?? 0,
+                ["attachSlotCount"] = g.AttachParentSlots?.Count ?? 0,
+                ["modelFile"] = g.Model?.File,
             };
         // BOOK/note round-trip: the readable body (BookText) is the proof the coupon copy
         // survived serialize->disk; value/weight/keywords confirm the item fields.
@@ -2839,6 +3611,12 @@ static int RunCreate(string[] argv)
                 ["infoCount"] = g.DialogTopics.Sum(dt => dt.Responses.Count),
                 ["lineCount"] = g.DialogTopics.Sum(dt => dt.Responses.Sum(rs => rs.Responses.Count)),
                 ["conditionCount"] = g.DialogTopics.Sum(dt => dt.Responses.Sum(rs => rs.Conditions.Count)),
+                // OS-04: per-INFO TIF VMAD fragment round-trip proof — how many INFOs carry a
+                // ScriptFragments adapter + the first fragment script name (re-read from binary).
+                ["infoFragmentCount"] = g.DialogTopics.Sum(dt => dt.Responses.Count(rs => rs.VirtualMachineAdapter?.ScriptFragments != null)),
+                ["infoFragmentScriptName"] = g.DialogTopics.SelectMany(dt => dt.Responses)
+                    .Select(rs => rs.VirtualMachineAdapter?.ScriptFragments?.Script?.Name)
+                    .FirstOrDefault(n => n != null),
                 // Kerem-polish: DLBR branch round-trip proof — branch count + how many topics are
                 // linked to a branch (0 branched topics = bare DIAL/INFO that won't surface in the wheel).
                 ["branchCount"] = g.DialogBranches.Count,
@@ -2869,6 +3647,14 @@ static int RunCreate(string[] argv)
             {
                 ["text"] = g.Description?.String,
                 ["name"] = g.Name?.String,
+                // OS-11: menu-button count + per-button text + the raw flag bitfield (MessageBox=1).
+                ["flags"] = (int)g.Flags,
+                ["buttonCount"] = g.MenuButtons.Count,
+                ["buttons"] = g.MenuButtons.Select(b => new Dictionary<string, object?>
+                {
+                    ["text"] = b.Text?.String,
+                    ["conditionCount"] = b.Conditions.Count,
+                }).ToList(),
             };
         // MSWP material-swap: substitution count + each original->replacement pair
         // is the proof the retexture map survived to disk.
@@ -2881,6 +3667,23 @@ static int RunCreate(string[] argv)
                     ["original"] = s.OriginalMaterial,
                     ["replacement"] = s.ReplacementMaterial,
                 }).ToList(),
+            };
+        // OS-08 COBJ: output/bench + component/category/condition counts round-trip proof.
+        foreach (var g in check.ConstructibleObjects)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["createdObject"] = g.CreatedObject.FormKeyNullable?.ToString(),
+                ["workbenchKeyword"] = g.WorkbenchKeyword.FormKeyNullable?.ToString(),
+                ["createdObjectCount"] = (int?)g.CreatedObjectCounts?.FirstOrDefault()?.Count,
+                ["componentCount"] = g.Components?.Count ?? 0,
+                ["components"] = g.Components?.Select(c => new Dictionary<string, object?>
+                {
+                    ["component"] = c.Component.FormKeyNullable?.ToString(),
+                    ["count"] = (int)c.Count,
+                }).ToList(),
+                ["categoryCount"] = g.Categories?.Count ?? 0,
+                ["conditionCount"] = g.Conditions.Count,
+                ["menuArt"] = g.MenuArtObject.FormKeyNullable?.ToString(),
             };
         foreach (var g in check.Globals)
             back[g.FormKey.ToString()] = new Dictionary<string, object?>
@@ -2908,6 +3711,9 @@ static int RunCreate(string[] argv)
                 ["name"] = g.Name?.String,
                 ["flagCount"] = System.Numerics.BitOperations.PopCount((uint)g.Flags),
                 ["relationCount"] = g.Relations.Count,
+                // OS-11: rank list + vendor-data presence round-trip proof.
+                ["rankCount"] = g.Ranks.Count,
+                ["hasVendorValues"] = g.VendorValues != null,
             };
         // W3d/W3e leveled lists: entry list + flags round-trip (per-entry reference/level/
         // count proves the Leveled*EntryData persisted).
@@ -2916,6 +3722,8 @@ static int RunCreate(string[] argv)
             {
                 ["entryCount"] = g.Entries?.Count ?? 0,
                 ["flags"] = (int)g.Flags,
+                // OS-11: chanceNone read back as the authored 0-100 int (Percent fraction *100).
+                ["chanceNone"] = (int)Math.Round(g.ChanceNone.Value * 100),
                 ["entries"] = g.Entries?.Select(e => new Dictionary<string, object?>
                 {
                     ["reference"] = e.Data?.Reference.FormKey.ToString(),
@@ -2928,6 +3736,7 @@ static int RunCreate(string[] argv)
             {
                 ["entryCount"] = g.Entries?.Count ?? 0,
                 ["flags"] = (int)g.Flags,
+                ["chanceNone"] = (int)Math.Round(g.ChanceNone.Value * 100),
                 ["entries"] = g.Entries?.Select(e => new Dictionary<string, object?>
                 {
                     ["reference"] = e.Data?.Reference.FormKey.ToString(),
@@ -2949,6 +3758,58 @@ static int RunCreate(string[] argv)
                 ["questCount"] = g.Quests.Count,
                 ["quests"] = g.Quests.Select(sq => sq.Quest.FormKeyNullable?.ToString()).ToList(),
             };
+        // OS-15 Holotape: the Data-union discriminator + its payload (null for the other variants).
+        foreach (var g in check.Holotapes)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["name"] = g.Name?.String,
+                ["holotapeType"] = g.Data switch
+                {
+                    IHolotapeSoundGetter => "sound",
+                    IHolotapeVoiceGetter => "voice",
+                    IHolotapeProgramGetter => "program",
+                    IHolotapeTerminalGetter => "terminal",
+                    _ => null,
+                },
+                ["sound"] = (g.Data as IHolotapeSoundGetter)?.Sound.FormKeyNullable?.ToString(),
+                ["scene"] = (g.Data as IHolotapeVoiceGetter)?.Scene.FormKeyNullable?.ToString(),
+                ["programFile"] = (g.Data as IHolotapeProgramGetter)?.File,
+                ["terminalLink"] = (g.Data as IHolotapeTerminalGetter)?.Terminal.FormKeyNullable?.ToString(),
+                ["value"] = (int)g.Value,
+                ["weight"] = g.Weight,
+                ["modelFile"] = g.Model?.File,
+            };
+        // OS-15 Terminal: banners + static body paragraphs.
+        foreach (var g in check.Terminals)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["name"] = g.Name?.String,
+                ["headerText"] = g.HeaderText?.String,
+                ["welcomeText"] = g.WelcomeText?.String,
+                ["bodyTextCount"] = g.BodyTexts?.Count ?? 0,
+                ["bodyTexts"] = g.BodyTexts?.Select(b => b.Text?.String).ToList(),
+                ["modelFile"] = g.Model?.File,
+            };
+        // OS-15 Story Manager Event/Branch nodes.
+        foreach (var g in check.StoryManagerEventNodes)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["eventType"] = g.Type?.ToString(),
+                ["parent"] = g.Parent.FormKeyNullable?.ToString(),
+                ["previousSibling"] = g.PreviousSibling.FormKeyNullable?.ToString(),
+                ["flags"] = (int)(g.Flags ?? 0),
+                ["maxConcurrentQuests"] = g.MaxConcurrentQuests,
+                ["conditionCount"] = g.Conditions?.Count ?? 0,
+            };
+        foreach (var g in check.StoryManagerBranchNodes)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["parent"] = g.Parent.FormKeyNullable?.ToString(),
+                ["previousSibling"] = g.PreviousSibling.FormKeyNullable?.ToString(),
+                ["flags"] = (int)(g.Flags ?? 0),
+                ["maxConcurrentQuests"] = g.MaxConcurrentQuests,
+                ["conditionCount"] = g.Conditions?.Count ?? 0,
+            };
         // W6.5 Activator + W8 Location/LocationReferenceType/EncounterZone round-trip.
         foreach (var g in check.Activators)
             back[g.FormKey.ToString()] = new Dictionary<string, object?>
@@ -2956,6 +3817,72 @@ static int RunCreate(string[] argv)
                 ["name"] = g.Name?.String,
                 ["keywordCount"] = g.Keywords?.Count ?? 0,
                 ["scriptCount"] = g.VirtualMachineAdapter?.Scripts.Count ?? 0,
+                ["modelFile"] = g.Model?.File,
+                ["materialSwap"] = g.Model?.MaterialSwap.FormKeyNullable?.ToString(),
+                ["objectBounds"] = new[] { g.ObjectBounds.First.X, g.ObjectBounds.First.Y, g.ObjectBounds.First.Z,
+                                           g.ObjectBounds.Second.X, g.ObjectBounds.Second.Y, g.ObjectBounds.Second.Z },
+            };
+        // OS-14 OTFT: worn-item count is the round-trip proof the outfit survived to disk.
+        foreach (var g in check.Outfits)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["itemCount"] = g.Items?.Count ?? 0,
+            };
+        // OS-02 common world base records — model/keyword + per-type round-trip proof.
+        foreach (var g in check.Statics)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["name"] = g.Name?.String,
+                ["modelFile"] = g.Model?.File,
+            };
+        foreach (var g in check.Doors)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["name"] = g.Name?.String,
+                ["modelFile"] = g.Model?.File,
+                ["keywordCount"] = g.Keywords?.Count ?? 0,
+                ["flags"] = (int)g.Flags,
+            };
+        foreach (var g in check.Lights)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["name"] = g.Name?.String,
+                ["modelFile"] = g.Model?.File,
+                ["keywordCount"] = g.Keywords?.Count ?? 0,
+                ["value"] = (int)g.Value,
+                ["weight"] = g.Weight,
+                ["radius"] = (int)g.Radius,
+                ["flags"] = (int)g.Flags,
+            };
+        foreach (var g in check.Containers)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["name"] = g.Name?.String,
+                ["modelFile"] = g.Model?.File,
+                ["keywordCount"] = g.Keywords?.Count ?? 0,
+                ["itemCount"] = g.Items?.Count ?? 0,
+                ["flags"] = (int)g.Flags,
+            };
+        foreach (var g in check.Ingestibles)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["name"] = g.Name?.String,
+                ["modelFile"] = g.Model?.File,
+                ["keywordCount"] = g.Keywords?.Count ?? 0,
+                ["value"] = (int)g.Value,
+                ["weight"] = g.Weight,
+                ["effectCount"] = g.Effects?.Count ?? 0,
+                ["flags"] = (int)g.Flags,
+            };
+        foreach (var g in check.Ingredients)
+            back[g.FormKey.ToString()] = new Dictionary<string, object?>
+            {
+                ["name"] = g.Name?.String,
+                ["modelFile"] = g.Model?.File,
+                ["keywordCount"] = g.Keywords?.Count ?? 0,
+                ["value"] = g.Value,
+                ["weight"] = g.Weight,
+                ["effectCount"] = g.Effects?.Count ?? 0,
             };
         foreach (var g in check.Locations)
             back[g.FormKey.ToString()] = new Dictionary<string, object?>
@@ -3312,22 +4239,56 @@ class RecordSpec
     // NPC template-chain (Faz 3 / W3c) — FaceGen-inheritance pair
     public string? DefaultTemplate { get; set; }         // FormLink -> Npc.DefaultTemplate (INpcSpawn: NPC_ or LVLN)
     public List<string>? UseTemplateActors { get; set; } // Npc.TemplateActorType flag names (OR'd into the bitfield)
+    // OS-14 — NPC actor flags (Npc.Flag: Essential|Protected|Invulnerable|Unique|Respawn|...).
+    // Distinct from the Quest/Faction `Flags` field below (overloading it would collide in
+    // type-shared specs); the author-facing key is `flags` (mapped to npcFlags in tools.py).
+    public List<string>? NpcFlags { get; set; }    // Npc.Flag names (OR'd into npc.Flags)
     // Armor (Faz 1.2)
     public List<string>? Keywords { get; set; }    // FormLink list -> armo.Keywords
     public int? Value { get; set; }                // gold value (Int32, >=0)
     public float? Weight { get; set; }             // item weight (Single, >=0)
     public short[]? ObjectBounds { get; set; }     // OBND: [x1,y1,z1,x2,y2,z2] (Int16) — MISC inventory/inspect bounds
     public string? PreviewTransform { get; set; }  // PTRN: FormKey of a TRNS — frames model in Pip-Boy/Inspect preview
+    public int[]? Color { get; set; }              // KYWD CNAM color [r,g,b] or [a,r,g,b] — workshop-menu category button
+    public int? KeywordType { get; set; }          // KYWD TNAM Type enum — 9 (RecipeFilter) REQUIRED for workshop build-menu filter keywords; null = plain keyword
     public int? ArmorRating { get; set; }          // DNAM armor rating (UInt16, 0-65535)
     public List<string>? BipedSlots { get; set; }  // BipedObjectFlag names (OR'd) -> BipedBodyTemplate
     public List<string>? Armatures { get; set; }   // ARMA addon FormLinks -> armo.Armatures (worn mesh; reuses Race below)
+    // OS-01 — WEAP weapon stats (reuses Name/Value/Weight/Keywords/Model/MaterialSwap/ObjectBounds).
+    public int? BaseDamage { get; set; }           // DNAM BaseDamage (UInt16, 0-65535)
+    public float? Speed { get; set; }              // DNAM Speed (Single, >=0)
+    public float? Reach { get; set; }              // DNAM Reach (Single, >=0)
+    public float? MinRange { get; set; }           // DNAM MinRange (Single, >=0)
+    public float? MaxRange { get; set; }           // DNAM MaxRange (Single, >=0)
+    public int? AmmoCapacity { get; set; }         // DNAM Capacity (UInt16, 0-65535)
+    public string? Ammo { get; set; }              // FormLink -> Weapon.Ammo (AMMO)
+    public string? AttackSound { get; set; }       // FormLink -> Weapon.AttackSound (SNDR)
+    public string? EquipSound { get; set; }        // FormLink -> Weapon.EquipSound (SNDR)
+    public string? AnimationType { get; set; }     // Weapon.AnimationTypes name (Gun|Bow|OneHandSword|...)
+    public List<string>? AttachParentSlots { get; set; } // AKEY keyword FormLinks -> Weapon.AttachParentSlots
     // Book/Note visual (coupon MVP) — world-model nif + the MSWP that retextures it
     public string? Model { get; set; }             // Book MODL: world-model nif path (meshes-relative)
     public string? MaterialSwap { get; set; }      // Book Model.MaterialSwap: MSWP FormKey "<6hex>:<master>"
     public List<SubstitutionSpec>? Substitutions { get; set; } // MSWP: [{original, replacement}] .bgsm paths
     // W1.5 glue records (Faz 3)
     public string? Text { get; set; }              // Message: MESG Description (body); title reuses Name
-    public List<string>? Items { get; set; }       // FormList: FLST Items (FormLink list, any record)
+    public List<string>? Items { get; set; }       // FormList: FLST Items (FormLink list, any record); OS-14 OTFT items
+    // OS-11 — widen glue-record coverage (reuses Flags for MESG message-box flags).
+    public List<MessageButtonSpec>? MenuButtons { get; set; } // MESG MenuButtons [{text, conditions?}]
+    public List<RankSpec>? Ranks { get; set; }     // FACT Ranks [{number, title, titleFemale?, insignia?}]
+    public VendorValuesSpec? VendorValues { get; set; } // FACT VendorValues (vendor/merchant data)
+    public int? ChanceNone { get; set; }           // LVLN/LVLI ChanceNone, 0-100 integer percent -> Noggog.Percent
+    // OS-02 — common world base records (STAT/DOOR/LIGH/CONT/ALCH/INGR) reuse Name/Model/
+    // MaterialSwap/Keywords/ObjectBounds/Value/Weight/Flags/Inventory.
+    public int? Radius { get; set; }               // LIGH Radius (UInt32)
+    public List<EffectSpec>? Effects { get; set; } // ALCH/INGR magic effects [{baseEffect, magnitude, area, duration}]
+    // OS-08 — COBJ crafting recipe (reuses Conditions for recipe gates).
+    public string? CreatedObject { get; set; }     // recipe output FormLink (MISC/ARMO/WEAP/...) — required
+    public string? WorkbenchKeyword { get; set; }  // bench-type KYWD FormLink — required
+    public int? CreatedObjectCount { get; set; }   // output count (default 1)
+    public string? MenuArtObject { get; set; }     // optional ARTO FormLink (recipe menu art)
+    public List<CobjComponentSpec>? Components { get; set; } // ingredient list [{component, count}]
+    public List<string>? Categories { get; set; }  // workshop-menu filter KYWD FormLinks (NOT an FLST)
     public string? GlobalType { get; set; }        // Global: float|int|short (selects concrete subclass)
     public double? GlobalValue { get; set; }       // Global: Data scalar (distinct from armor Value int?)
     // W3.5 Faction record (Faz 3) — reuses Flags (below) for faction flags
@@ -3350,6 +4311,7 @@ class RecordSpec
     public string? Cell { get; set; }               // target cell FormKey "<6hex>:<master>"
     public string? Target { get; set; }             // override target FormKey (leveledItemOverride)
     public bool? ClearExisting { get; set; }         // clear deep-copied refs (default FALSE — additive; opt in to wipe)
+    public int? InsertAt { get; set; }               // flstOverride: insert new items at this index (default null = append). Workshop menus cap displayed categories — insert near the front (e.g. 1) so a custom category isn't dropped past the cap.
     // W6 Story Manager Quest Node (Faz 3) — reuses Flags for AStoryManagerNode.Flag
     public string? Parent { get; set; }             // SNAM: parent SM node FormLink
     public string? PreviousSibling { get; set; }    // sibling-ordering FormLink
@@ -3358,6 +4320,18 @@ class RecordSpec
     public float? HoursUntilReset { get; set; }     // node reset window (hours)
     public List<ConditionSpec>? Conditions { get; set; } // node-level conditions (W1 builder)
     public List<SmqnQuestSpec>? Quests { get; set; }     // quests this node can (auto-)start
+    // OS-15 (rewritten 2026-11-24 after the original was lost) — NOTE/holotape, TERM, SMEN/SMBN.
+    // Holotape reuses Name/Model/MaterialSwap/Value/Weight/ObjectBounds; TERM reuses Name/Text
+    // (WelcomeText)/Model/MaterialSwap/ObjectBounds; SMEN/SMBN reuse Parent/PreviousSibling/Flags/
+    // MaxConcurrentQuests/Conditions above.
+    public string? HolotapeType { get; set; }       // Holotape.Types name: sound|voice|program|terminal
+    public string? Sound { get; set; }              // holotape sound -> SNDR FormLink
+    public string? Scene { get; set; }              // holotape voice -> SCEN FormLink
+    public string? ProgramFile { get; set; }        // holotape program -> .swf path
+    public string? TerminalLink { get; set; }       // holotape terminal -> TERM FormLink
+    public string? HeaderText { get; set; }         // TERM header banner
+    public List<string>? BodyTexts { get; set; }    // TERM static body paragraphs
+    public string? EventType { get; set; }          // SMEN StoryManagerEventNode.Types name
     // W8 Location / EncounterZone (Faz 3) — reuses Name/Keywords/Flags/Location
     public string? ParentLocation { get; set; }     // LCTN ParentLocation FormLink
     public string? Owner { get; set; }              // ECZN Owner FormLink (faction/npc)
@@ -3512,11 +4486,55 @@ class RelationSpec
     public string? Reaction { get; set; }          // CombatReaction name (Neutral|Enemy|Ally|Friend)
 }
 
+// OS-11: one MESG menu button — the choice text + optional show-conditions (reuses BuildCondition).
+class MessageButtonSpec
+{
+    public string? Text { get; set; }              // MessageButton.Text (TranslatedString)
+    public List<ConditionSpec>? Conditions { get; set; } // optional button-visibility conditions
+}
+
+// OS-11: one FACT rank. Title is gendered (Male/Female); a single `title` fills both, with an
+// optional `titleFemale` override.
+class RankSpec
+{
+    public int? Number { get; set; }               // Rank.Number (UInt32; 0-based rank index)
+    public string? Title { get; set; }             // gendered title — male slot (and female when no override)
+    public string? TitleFemale { get; set; }       // optional female-title override
+    public string? Insignia { get; set; }          // Rank.Insignia (texture path)
+}
+
+// OS-11: FACT vendor/merchant data (the 3 buy/sell bools + trade hours + radius).
+class VendorValuesSpec
+{
+    public int StartHour { get; set; }             // VendorValues.StartHour (UInt16)
+    public int EndHour { get; set; }               // VendorValues.EndHour (UInt16)
+    public int Radius { get; set; }                // VendorValues.Radius (UInt16)
+    public bool BuysStolen { get; set; }           // BuysStolenItems
+    public bool BuysNonStolen { get; set; }        // BuysNonStolenItems
+    public bool BuyEverything { get; set; }        // BuySellEverythingNotInList
+}
+
 // W3b: one NPC inventory entry (CNTO) — an item FormLink + count.
 class ItemSpec
 {
     public string? Item { get; set; }              // FormLink "<6hex>:<ModKey>"
     public int Count { get; set; } = 1;            // ContainerItem.Count (Int32)
+}
+
+// OS-02: one magic Effect on an ALCH/INGR — a base MGEF FormLink + EffectData scalars.
+class EffectSpec
+{
+    public string? BaseEffect { get; set; }        // Effect.BaseEffect FormLink (MGEF) — required
+    public float Magnitude { get; set; }           // EffectData.Magnitude (Single)
+    public int Area { get; set; }                  // EffectData.Area (Int32)
+    public int Duration { get; set; }              // EffectData.Duration (Int32)
+}
+
+// OS-08: one COBJ ingredient component — a MISC/item FormLink + count.
+class CobjComponentSpec
+{
+    public string? Component { get; set; }         // ConstructibleObjectComponent.Component FormLink (IItem)
+    public int Count { get; set; } = 1;            // ConstructibleObjectComponent.Count (UInt32)
 }
 
 // W3b: one NPC perk placement (PerkPlacement) — a perk FormLink + rank.
@@ -3637,6 +4655,22 @@ class ResponseSpec
     public List<LineSpec>? Lines { get; set; }     // spoken lines
     public List<ConditionSpec>? Conditions { get; set; } // INFO conditions (Faz 2.1b)
     public SetStageSpec? SetParentQuestStage { get; set; } // P0: script-free INFO -> owning-quest stage advance (SNAM)
+    public string? FormKey { get; set; }           // OS-04: pin the INFO FormKey ("<6hex>:<ModKey>") so the TIF script name stays stable across re-authoring; null => mint
+    public InfoFragmentSpec? Fragment { get; set; } // OS-04: TIF VMAD fragment — run Papyrus on this line (docs/fo4-quest-dialogue-system.md mechanism B)
+}
+
+// OS-04 (docs/fo4-quest-dialogue-system.md mechanism B): a per-INFO Papyrus fragment (TIF VMAD).
+// The line's TIF_<questEID>_<8hexINFOFormID> script's Fragment_Begin/Fragment_End run when the
+// line begins/ends, letting it do arbitrary Papyrus (AddItem + Notification + conditional reward)
+// beyond the script-free SNAM stage-advance. Mirrors the quest FragmentSpec shape; the compiled
+// .pex is decoupled (fo4_papyrus_build / Caprica) — the writer emits VMAD metadata only.
+class InfoFragmentSpec
+{
+    public string? ScriptName { get; set; }        // TIF_<eid>_<8hex> class — DialogResponsesAdapter ScriptFragments + each fragment's ScriptName
+    public string? Flags { get; set; }             // ScriptEntry.Flag for the fragment script; default none
+    public List<ScriptPropertySpec>? Properties { get; set; } // fragment script properties (reuses ScriptPropertySpec)
+    public string? OnBegin { get; set; }           // Fragment_* function fired when the line BEGINS; null => no OnBegin fragment
+    public string? OnEnd { get; set; }             // Fragment_* function fired when the line ENDS (turn-in reward); null => no OnEnd fragment
 }
 
 // P0 (docs/fo4-quest-dialogue-system.md): DialogResponses.SetParentQuestStage (SNAM). OnEnd=N

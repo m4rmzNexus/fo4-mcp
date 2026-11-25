@@ -28,6 +28,7 @@ is backed up to `.bak` before packing, mirroring fo4_ba2_version_patch.
 
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 from typing import Any, Literal
 
@@ -42,6 +43,41 @@ _ARCHIVE_TYPE_FLAGS = {
     "dds": "-fo4dds",
     "textures": "-fo4dds",  # alias
 }
+
+_BA2_MAGIC = b"BTDX"
+# Type tag the engine writes at offset 8 for each archive flavour.
+_EXPECTED_TYPE_TAG = {"general": "GNRL", "dds": "DX10", "textures": "DX10"}
+
+
+def _read_ba2_header(data: bytes) -> dict[str, Any]:
+    """Parse the fixed BA2 header: magic 'BTDX'(4) | version u32 | type 'GNRL'/'DX10'(4) | fileCount u32.
+
+    Pure. Returns magic_ok / version / type_tag / file_count (None where unreadable).
+    Mirrors tools._patch_ba2_version_bytes' layout (verified vs real archives)."""
+    if len(data) < 16 or data[0:4] != _BA2_MAGIC:
+        return {"magic_ok": False, "version": None, "type_tag": None, "file_count": None}
+    return {
+        "magic_ok":   True,
+        "version":    struct.unpack_from("<I", data, 4)[0],
+        "type_tag":   data[8:12].decode("ascii", "replace"),
+        "file_count": struct.unpack_from("<I", data, 12)[0],
+    }
+
+
+def _naming_warning(out_name: str, archive_type: str) -> str | None:
+    """The engine only AUTO-loads a BA2 named '<PluginName> - Main.ba2' (general)
+    or '<PluginName> - Textures.ba2' (dds) matching a plugin in the load order.
+    Return a warning if the output name breaks that convention, else None (it may
+    still be valid for manual/loose use, so this is advisory, not a failure)."""
+    lower = out_name.lower()
+    if archive_type == "general":
+        if not lower.endswith(" - main.ba2"):
+            return (f"'{out_name}' is not named '<PluginName> - Main.ba2' — the engine only "
+                    "auto-loads a general archive whose name matches a plugin with that suffix")
+    elif not lower.endswith(" - textures.ba2"):
+        return (f"'{out_name}' is not named '<PluginName> - Textures.ba2' — the engine only "
+                "auto-loads a texture archive whose name matches a plugin with that suffix")
+    return None
 
 
 def fo4_pack_ba2(
@@ -133,8 +169,35 @@ def fo4_pack_ba2(
     if share:
         args.append("-share")
 
+    # The binary path is RECORDED (is_resolved) but may not be on disk; surface a
+    # clean ToolBinaryMissingError instead of an opaque run_tool failure. Placed
+    # last (after the forbidden-output / missing-source gates) so those keep
+    # precedence — callers/tests rely on that ordering.
+    if not binary.is_file():
+        raise ToolBinaryMissingError("bsarch", str(binary))
+
     result = run_tool(binary, args, timeout=cfg.subprocess_timeout)
-    succeeded = result.ok and out.exists()
+
+    # OS-17: success != "a file appeared" — read the produced header and confirm
+    # it's a real BA2 of the requested flavour, and flag a non-conventional name.
+    header: dict[str, Any] | None = None
+    header_valid = False
+    if out.exists():
+        header = _read_ba2_header(out.read_bytes()[:16])
+        expected_tag = _EXPECTED_TYPE_TAG[archive_type]
+        header_valid = bool(header["magic_ok"]) and header["type_tag"] == expected_tag
+        if not header["magic_ok"]:
+            warnings.append("output is not a valid BA2 (missing BTDX magic) — pack likely failed")
+        elif header["type_tag"] != expected_tag:
+            warnings.append(
+                f"BA2 type tag '{header['type_tag']}' != expected '{expected_tag}' for "
+                f"archive_type='{archive_type}' — wrong -fo4/-fo4dds flavour?"
+            )
+        naming = _naming_warning(out.name, archive_type)
+        if naming:
+            warnings.append(naming)
+
+    succeeded = result.ok and out.exists() and header_valid
 
     return ok({
         "source_dir":   str(src),
@@ -145,6 +208,7 @@ def fo4_pack_ba2(
         "share":        share,
         "exit_code":    result.exit_code,
         "ok":           succeeded,
+        "header":       header,
         "bytes":        out.stat().st_size if out.exists() else 0,
         "backup_path":  str(backup) if backup else None,
         "argv":         args,

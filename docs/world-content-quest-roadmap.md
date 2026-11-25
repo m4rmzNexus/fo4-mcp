@@ -276,4 +276,4 @@ W0 → W1 → W3 → W3.5 → W4 → W5 → W6 → W11a → W12 → W11b
 
 ---
 
-**Dosya:** `C:\Modding\docs\world-content-quest-roadmap.md` (committed-ready). Tüm üç adversarial lens'in critical/major/wrong-tag bulguları çözüldü; her feasibility iddiası disk ground-truth (Remnants Cells=tek NavMeshGenCell-override, Factions/Globals×16/Activators/Messages×8/Terminals×14/LVLI/Holotapes mevcut, `Small`/ESL flag, SMQN PreviousSibling 1BC007, NAVI 23-mesh stitch) veya CLAUDE.md §4 reality-check disiplinine zeminlendi.
+**Dosya:** `C:\GameDev\mods\fallout\fo4-mcp\docs\world-content-quest-roadmap.md` (committed-ready). Tüm üç adversarial lens'in critical/major/wrong-tag bulguları çözüldü; her feasibility iddiası disk ground-truth (Remnants Cells=tek NavMeshGenCell-override, Factions/Globals×16/Activators/Messages×8/Terminals×14/LVLI/Holotapes mevcut, `Small`/ESL flag, SMQN PreviousSibling 1BC007, NAVI 23-mesh stitch) veya CLAUDE.md §4 reality-check disiplinine zeminlendi.

@@ -13,15 +13,17 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fo4_mcp.config import Config, load_config
 from fo4_mcp.errors import Fo4McpError
 from fo4_mcp.manifest import parse_manifest
 from fo4_mcp.tools import (
-    _mutagen_cli_binary,
     fo4_create_record,
     fo4_lint_npc_template,
 )
+
+from conftest import require_or_skip_writer
 
 _REPO = Path(__file__).resolve().parents[2]
 _MANIFEST = parse_manifest(_REPO / "tools" / "MANIFEST.md")
@@ -54,8 +56,7 @@ def staging_out():
 
 
 def _skip_if_no_writer(cfg, manifest):
-    if _mutagen_cli_binary(cfg, manifest) is None:
-        pytest.skip("mutagen-cli not built")
+    require_or_skip_writer(cfg, manifest)
 
 
 def test_lint_npc_missing_plugin(tmp_path):

@@ -25,7 +25,8 @@ from typing import Any
 from .config import Config
 from .errors import ErrorCode, Fo4McpError, ToolBinaryMissingError
 
-_CK_TITLE = "CreationKit"
+# MO2's own auto-registered entry is titled "Creation Kit"; older hand-made setups used "CreationKit".
+_CK_TITLES = ("CreationKit", "Creation Kit")
 
 
 def _read_base_directory(ini: Path, mo2_dir: Path) -> Path:
@@ -42,22 +43,40 @@ def _read_base_directory(ini: Path, mo2_dir: Path) -> Path:
     return mo2_dir  # fallback: overwrite alongside the exe
 
 
-def _ck_entry_index(ini_lines: list[str]) -> int | None:
-    """Find the customExecutables index N whose N\\title == CreationKit."""
+def _ck_entry(ini_lines: list[str]) -> tuple[int, str] | None:
+    """Find the customExecutables (index N, title) whose N\\title is one of _CK_TITLES."""
     for l in ini_lines:
         key, _, val = l.partition("=")
-        if key.endswith("\\title") and val.strip() == _CK_TITLE:
-            return int(key.split("\\", 1)[0])
+        if key.endswith("\\title") and val.strip() in _CK_TITLES:
+            return int(key.split("\\", 1)[0]), val.strip()
     return None
 
 
+def _ck_entry_index(ini_lines: list[str]) -> int | None:
+    hit = _ck_entry(ini_lines)
+    return hit[0] if hit else None
+
+
+_DEFAULT_FAILURE_MARKERS = ("ERROR", "FATAL", "failed", "Assert")
+
+
 def run_ck_via_mo2(
-    cfg: Config, ck_args: list[str], *, timeout: int = 600, poll: int = 20
+    cfg: Config,
+    ck_args: list[str],
+    *,
+    timeout: int = 600,
+    poll: int = 20,
+    expected_outputs: list[str] | None = None,
+    failure_markers: tuple[str, ...] = _DEFAULT_FAILURE_MARKERS,
 ) -> dict[str, Any]:
     """Launch CreationKit with `ck_args` through MO2 (VFS-safe) and wait (bounded) for it to exit.
 
-    Returns {launched, exited, timed_out, duration_s, ckpe_log_tail, overwrite_new}. Restores the
-    MO2 ini in a finally block. Raises if MO2/CK or the CreationKit MO2 entry is missing.
+    Returns {launched, exited, timed_out, duration_s, ckpe_log_tail, overwrite_new,
+    expected_outputs, missing_outputs, ckpe_errors, artifacts_ok}. Restores the MO2 ini in a
+    finally block. Raises if MO2/CK or the CreationKit MO2 entry is missing.
+
+    artifacts_ok is an INDEPENDENT gate ("did the op actually produce its artifact + no ckpe.log
+    errors"): "not hanging" no longer implies success. exited/timed_out keep their old semantics.
     """
     import ctypes
     import subprocess
@@ -80,11 +99,13 @@ def run_ck_via_mo2(
 
     raw = ini.read_text(encoding="utf-8", errors="surrogateescape")
     lines = raw.splitlines()
-    idx = _ck_entry_index(lines)
-    if idx is None:
+    hit = _ck_entry(lines)
+    if hit is None:
         raise Fo4McpError(
             ErrorCode.INVALID_ARGUMENT,
-            f"no MO2 custom-executable titled '{_CK_TITLE}' — add Creation Kit to MO2 first", {})
+            f"no MO2 custom-executable titled {' or '.join(repr(t) for t in _CK_TITLES)}"
+            " — add Creation Kit to MO2 first", {})
+    idx, title = hit
 
     bak = ini.with_suffix(ini.suffix + ".ckrunbak")
     shutil.copy2(ini, bak)
@@ -106,9 +127,10 @@ def run_ck_via_mo2(
             except OSError:
                 pass
 
-        # launch via ShellExecute (same as the in-game runner) — detached, shell-owned
+        # launch via ShellExecute (same as the in-game runner) — detached, shell-owned.
+        # Quoted: a title with a space ("Creation Kit") would otherwise split into two argv items.
         rc = ctypes.windll.shell32.ShellExecuteW(
-            None, "open", str(mo2_exe), f"moshortcut://:{_CK_TITLE}", str(mo2_exe.parent), 1)
+            None, "open", str(mo2_exe), f'"moshortcut://:{title}"', str(mo2_exe.parent), 1)
         if rc <= 32:
             raise Fo4McpError(ErrorCode.SUBPROCESS_FAILED,
                               f"ShellExecute failed to launch MO2 (code {rc})", {})
@@ -140,25 +162,45 @@ def run_ck_via_mo2(
 
     after = {str(p) for p in overwrite.rglob("*")} if overwrite.exists() else set()
     new_files = sorted(p for p in (after - before) if Path(p).is_file())
+    overwrite_new_rel = [str(Path(p).relative_to(overwrite)) for p in new_files]
     tail = ""
+    ckpe_lines: list[str] = []
     if ckpe_log.exists():
-        tail = "\n".join(ckpe_log.read_text(errors="surrogateescape").splitlines()[-12:])
+        ckpe_lines = ckpe_log.read_text(errors="surrogateescape").splitlines()
+        tail = "\n".join(ckpe_lines[-12:])
+
+    # artifact validation: did the op produce its expected output(s), and is ckpe.log clean?
+    # missing_outputs/ckpe_errors are an independent gate — "not hanging" no longer == success.
+    missing = [
+        e for e in (expected_outputs or [])
+        if not any(e.lower() in nf.lower() for nf in overwrite_new_rel)
+    ]
+    log_errors = [
+        ln for ln in ckpe_lines
+        if any(m.lower() in ln.lower() for m in failure_markers)
+    ]
     return {
         "launched": True,
         "exited": not timed_out,
         "timed_out": timed_out,
         "duration_s": round(time.monotonic() - started, 1),
         "overwrite_dir": str(overwrite),
-        "overwrite_new": [str(Path(p).relative_to(overwrite)) for p in new_files],
+        "overwrite_new": overwrite_new_rel,
         "ckpe_log_tail": tail,
+        "expected_outputs": expected_outputs or [],
+        "missing_outputs": missing,
+        "ckpe_errors": log_errors[:20],
+        "artifacts_ok": not missing and not log_errors,
     }
 
 
 def _proc_running(name: str) -> bool:
     import subprocess
-    out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}"],
+
+    from .ingame_test import _proc_present  # exact field-0 CSV match (no substring false-positive)
+    out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}", "/FO", "CSV", "/NH"],
                          capture_output=True, text=True).stdout
-    return name.lower() in out.lower()
+    return _proc_present(out, name)
 
 
 def _kill(name: str) -> None:

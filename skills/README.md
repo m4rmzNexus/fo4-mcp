@@ -1,65 +1,58 @@
-# fo4-mcp skill pack
+# Fallout 4 agent skills
 
-Claude Code skills that drive the `fo4-mcp` MCP tools into end-to-end Fallout 4
-mod authoring workflows. Each skill is a `<name>/SKILL.md` with YAML frontmatter
-(`name` + `description`) and a markdown body following one shared pattern:
+Skills that drive the `fo4-mcp` MCP tools into end-to-end Fallout 4 mod
+authoring workflows. Each skill is a `<name>/SKILL.md` with YAML frontmatter
+(`name` + `description`) and a body following one pattern:
+**tool chain -> inline best-practice guards -> scannable output**. Choose the
+workflow matching the requested outcome; the connected server's tool list
+(`tools/list`) decides which operations are available on this checkout.
 
-> **tool chain → inline best-practice guards → scannable output shape**
+| Request | Skill |
+|---|---|
+| Check runtime, MO2 profile or missing authoring tools | [Setup check](fo4-setup-check/SKILL.md) |
+| Inspect or edit a plugin record | [Record edit](fo4-record-edit/SKILL.md) |
+| Find a model, texture or provider | [Asset trace](fo4-asset-trace/SKILL.md) |
+| Adapt an existing design to Fallout 4 art, scale and gameplay | [Asset adaptation](fo4-asset-adapt/SKILL.md) |
+| Change an armor record | [Armor swap](fo4-armor-swap/SKILL.md) |
+| Compile a Papyrus script | [Papyrus](fo4-papyrus/SKILL.md) |
+| Build or repair a quest and its dialogue | [Quest author](fo4-quest-author/SKILL.md) |
+| Package a release or review a ZIP | [Package release](fo4-package-release/SKILL.md) |
+| Test behavior in a running game | [In-game test](fo4-ingame-test/SKILL.md) |
+| Diagnose a crash log | [Crash debug](fo4-crash-debug/SKILL.md) |
 
-Design + decisions: `docs/phase-0-decisions.md` (Karar 2 persona, Karar 3 tools),
-backlog item `docs/V2-backlog.md` #6.
+## Shared guards (woven into each skill)
 
-## Tiers
+- Writes land in `staging/` (or diff-gated `fixtures/`); the game `Data/` stays read-only.
+- New records at ObjectID >= `0x800` (SPID drops lower ids); ESL caps at `0xFFF`.
+- Masters-first load order; ESL budget headroom (< 2048 new records for a light flag).
+- Precombine/previs warning on CELL or placed-reference edits.
+- Spriggit ESP <-> YAML round trip with a diff gate before any overwrite.
+- Disk-valid, clean-profile install and observed in-game behavior are reported separately.
 
-**T0 — foundation (built; 100% backed by the 7 working MCP tools):**
+## Making them discoverable
 
-| Skill | Tool chain | What it does |
-|---|---|---|
-| `fo4-setup-check` | get_environment + read_load_order | Pre-authoring readiness; go/no-go. Read-only. |
-| `fo4-record-edit` | inspect → spriggit_export → (YAML edit) → spriggit_import | The core safe record loop, diff-gated. |
-| `fo4-crash-debug` | analyze_crash_log + read_load_order | Crash triage with a grounded culprit + fix. |
-| `fo4-papyrus` | papyrus_build (Caprica) | Compile `.psc → .pex` with resolved includes. |
-
-**T1 — composite authoring (planned):** `fo4-armor-swap` (continues the
-`fixtures/armor-swap-test` flow), `fo4-quest-author`.
-
-**T2 — release / hygiene (planned):** `fo4-package-release` (ESL eligibility,
-PRP/precombine safety, FOMOD; BA2 packing is a V2 gap — manual BSArch for now).
-
-**T3 — runtime verification (built):** `fo4-ingame-test` (drives the
-`fo4_run_ingame_test` MCP tool — a headless Tier 3 F4SE in-game smoke test:
-job file → MO2 launch → console commands by runtime FormID → Papyrus capture →
-auto-quit). User-gated: needs the live game + a Steam login, so it is **not**
-CI-runnable. Proves *runtime*-valid, where T0/T1 prove *disk*-valid.
-
-## Community best-practice guards (woven into each skill)
-
-- Precombine/previs breakage warning on CELL/STAT edits (PRP context).
-- FormID hygiene — new records ≥ `0x800` (SPID drops below).
-- Masters-first load order; LOOT sort suggestion.
-- ESL budget headroom (<2048 new records to qualify for a light flag).
-- Spriggit ESP→YAML serialization for version control.
-- `staging/`-only writes; the Steam `Data/` folder stays read-only.
-
-## Making them discoverable in Claude Code
-
-These live in the repo's `skills/` (canonical, git-tracked). Claude Code
-discovers project skills from `.claude/skills/<name>/SKILL.md`. To use them as
-`/fo4-...` in this project, junction each into `.claude/skills/` (Windows):
+The canonical files live here under `skills/` (git-tracked). Clients discover
+project skills through local directory junctions (not committed; edit the
+canonical file so every client sees the same text):
 
 ```powershell
-New-Item -ItemType Junction -Path ".claude\skills\fo4-setup-check" `
-         -Target "skills\fo4-setup-check"
-# repeat per skill
+# from the fo4-mcp repo root; Claude Code uses .claude\skills, Codex uses .agents\skills
+foreach ($s in Get-ChildItem skills -Directory) {
+  foreach ($dst in '.claude\skills', '.agents\skills') {
+    New-Item -ItemType Directory -Force $dst | Out-Null
+    if (-not (Test-Path "$dst\$($s.Name)")) {
+      New-Item -ItemType Junction -Path "$dst\$($s.Name)" -Target $s.FullName | Out-Null
+    }
+  }
+}
 ```
 
-(or copy, or add `skills/` to your Claude Code skills path). The junctions are
-local filesystem links, not committed — `skills/` stays the single source.
+The tools themselves need a connected fo4-mcp server from the intended checkout
+(see `mcp-server/README.md`).
 
-## Gaps these skills route around (manual GUI or V2)
+## Gaps the skills route around
 
-- Mesh/slider/material/texture authoring → BodySlide, OutfitStudio, Material
-  Editor, CAO (GUI; skills orchestrate around them).
-- BA2 packing → V2 (`docs/V2-backlog.md` #4); manual BSArch (`tools/xedit`).
-- Navmesh, precombine generation, scenes, dialogue/voice → Creation Kit (GUI).
-- Record-scoped (fast) inspect on master-scale plugins → V2 (#2).
+- Skinned meshes, sliders and weighting: OutfitStudio / BodySlide (GUI).
+- Navmesh beyond isolated interiors, precombine generation, CK-only scenes:
+  Creation Kit (the CK tools here are gated launchers).
+- Recorded voice: `fo4_voice_handoff` lists the lines; silent placeholders only.

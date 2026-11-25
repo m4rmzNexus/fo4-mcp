@@ -29,8 +29,8 @@ import shlex
 import sys
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]   # C:\Modding
-_PKG_ROOT  = Path(__file__).resolve().parents[1]   # C:\Modding\mcp-server
+_REPO_ROOT = Path(__file__).resolve().parents[2]   # <repo> (fo4-mcp root)
+_PKG_ROOT  = Path(__file__).resolve().parents[1]   # <repo>\mcp-server
 
 # Make `fo4_mcp` importable without installing the package.
 sys.path.insert(0, str(_PKG_ROOT))

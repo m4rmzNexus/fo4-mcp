@@ -14,12 +14,13 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/ — for `from conftest import`
 
 from fo4_mcp.config import Config, load_config
 from fo4_mcp.errors import Fo4McpError, PathForbiddenError
 from fo4_mcp.manifest import parse_manifest
 from fo4_mcp.tools import (
-    _mutagen_cli_binary,
+    _dialogue_dump,
     _norm_conditions,
     fo4_check_previs_safety,
     fo4_create_record,
@@ -28,6 +29,7 @@ from fo4_mcp.tools import (
     fo4_place_into_cell,
     fo4_spriggit_export,
 )
+from conftest import require_or_skip_writer
 
 _REPO = Path(__file__).resolve().parents[2]
 _MANIFEST = parse_manifest(_REPO / "tools" / "MANIFEST.md")
@@ -282,8 +284,10 @@ def staging_out():
 
 
 def _skip_if_no_writer(cfg, manifest):
-    if _mutagen_cli_binary(cfg, manifest) is None:
-        pytest.skip("mutagen-cli not built")
+    # Delegate to the shared gate (OS-06) so FO4MCP_REQUIRE_WRITER fails loudly
+    # here too — this is the largest writer-dependent suite, so a silent skip
+    # would mask a Program.cs serialization regression exactly where it matters.
+    require_or_skip_writer(cfg, manifest)
 
 
 def test_create_npc_and_armor_roundtrip(real_env, staging_out):
@@ -512,6 +516,124 @@ def test_create_quest_dialogue_with_conditions(real_env, staging_out):
     assert rec["conditionCount"] == 2
 
 
+def _dump_infos(cfg, manifest, out, quest_eid):
+    """Helper: invoke the read-only dialogue-dump and flatten every INFO across topics."""
+    dump = _dialogue_dump(cfg, manifest, out, quest_eid)
+    assert dump["found"] is True
+    return [info for topic in dump["topics"] for info in topic["infos"]]
+
+
+def test_create_quest_info_set_parent_quest_stage(real_env, staging_out):
+    """OS-05: the script-free SNAM stage-advance (DialogResponses.SetParentQuestStage) round-trips.
+    Author an INFO with setParentQuestStage.onEnd=20 plus a control INFO with none; read back via
+    the independent dialogue-dump path and assert setStageOnEnd survives (and the control is null)."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os05Snam.esp"
+    spec = {"records": [{
+        "type": "Quest", "editorId": "Os05Quest", "name": "Turn In", "questType": "SideQuests",
+        "topics": [
+            {"editorId": "Os05Reward", "name": "Reward",
+             "responses": [{"prompt": "Here you go.",
+                            "lines": [{"text": "Quest complete."}],
+                            "setParentQuestStage": {"onEnd": 20}}]},
+            {"editorId": "Os05Plain", "name": "Plain",
+             "responses": [{"lines": [{"text": "No stage change."}]}]},
+        ],
+    }]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+
+    infos = _dump_infos(cfg, manifest, out, "Os05Quest")
+    # the SNAM-bearing INFO: onEnd=20 survives, onBegin defaults to -1 (subrecord written).
+    snam = [i for i in infos if i.get("setStageOnEnd") == 20]
+    assert len(snam) == 1
+    assert snam[0]["setStageOnBegin"] == -1
+    # the control INFO never wrote the subrecord -> the field is null (None), not -1.
+    plain = [i for i in infos if i.get("setStageOnEnd") != 20]
+    assert len(plain) == 1
+    assert plain[0]["setStageOnEnd"] is None
+    assert plain[0]["setStageOnBegin"] is None
+
+
+def test_dialogue_dump_renders_alias_param_from_number_slot(real_env, staging_out):
+    """OS-13: GetIsAliasRef's param1 is an Alias = NUMBER slot, not a FormKey. The dump must
+    render the alias index (via GetParameterTypes), not a spurious/null FormKey. A GetIsID
+    condition (a Form slot) must still render its FormKey — the Form path stays unbroken."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os13Param.esp"
+    spec = {"records": [{
+        "type": "Quest", "editorId": "Os13Quest", "name": "Aliased", "questType": "SideQuests",
+        "aliases": [{"id": 4, "name": "Slot4"}],
+        "topics": [{"editorId": "Os13Greet", "name": "Greeting", "responses": [{
+            "lines": [{"text": "Alias-gated."}],
+            "conditions": [
+                {"function": "GetIsAliasRef", "value": 1, "param1": "4"},
+                {"function": "GetIsID", "value": 1, "param1": "0750A3:Fallout4.esm"},
+            ],
+        }]}],
+    }]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+
+    infos = _dump_infos(cfg, manifest, out, "Os13Quest")
+    conds = infos[0]["conditions"]
+    alias_cond = next(c for c in conds if c["fn"] == "GetIsAliasRef")
+    assert alias_cond["param1"] == "4"          # the alias index, NOT a FormKey
+    assert alias_cond["paramType1"] == "Alias"  # the slot category proves the number path
+    id_cond = next(c for c in conds if c["fn"] == "GetIsID")
+    # the Form slot path is unbroken: a record param still renders its FormKey string.
+    assert id_cond["param1"] is not None and ":" in id_cond["param1"]
+    assert id_cond["paramType1"] == "ReferencableObject"
+
+
+def test_dialogue_dump_surfaces_alias_run_on(real_env, staging_out):
+    """OS-13: a QuestAlias run-on condition stores the alias id in Unknown3; the dump surfaces it
+    as aliasRunOn so GetIsAliasRef-by-runOn (not just by param) is visible."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os13RunOn.esp"
+    spec = {"records": [{
+        "type": "Quest", "editorId": "Os13RunOnQuest", "name": "RunOn", "questType": "SideQuests",
+        "aliases": [{"id": 2, "name": "Slot2"}],
+        "topics": [{"editorId": "Os13RunOnGreet", "name": "Greeting", "responses": [{
+            "lines": [{"text": "Dead alias."}],
+            "conditions": [{"function": "GetDead", "value": 1, "runOn": "QuestAlias", "aliasRunOn": 2}],
+        }]}],
+    }]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+
+    infos = _dump_infos(cfg, manifest, out, "Os13RunOnQuest")
+    cond = infos[0]["conditions"][0]
+    assert cond["runOn"] == "QuestAlias"
+    assert cond["aliasRunOn"] == 2
+
+
+def test_dialogue_dump_link_and_fragment_shape(real_env, staging_out):
+    """OS-13: the per-INFO link/scene + fragment readback keys exist. On a plain (no-script,
+    no-link) INFO they are null and hasFragment is False — the shape contract OS-04 lights up."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os13Shape.esp"
+    spec = {"records": [{
+        "type": "Quest", "editorId": "Os13ShapeQuest", "name": "Shape", "questType": "SideQuests",
+        "topics": [{"editorId": "Os13ShapeGreet", "name": "Greeting",
+                    "responses": [{"lines": [{"text": "Plain line."}]}]}],
+    }]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+
+    info = _dump_infos(cfg, manifest, out, "Os13ShapeQuest")[0]
+    assert info["hasFragment"] is False
+    assert info["fragment"] is None
+    # link/scene keys present but null on a plain INFO (light up post link/scene authoring).
+    for key in ("previousDialog", "linkTopic", "startScene", "startScenePhase"):
+        assert key in info
+        assert info[key] is None
+
+
 def test_create_quest_with_aliases(real_env, staging_out):
     """Faz 2.1c: quest aliases persist; a ForcedReference FormKey auto-adds its master."""
     cfg, manifest = real_env
@@ -663,6 +785,64 @@ def test_create_quest_with_fragments(real_env, staging_out):
     assert rec["fragmentScriptName"] == "STF:Fragments:Quests:QF_Faz21fQuest_01000800"
     assert rec["scriptCount"] == 1            # Faz 2.1d whole-script binding coexists
     assert rec["scriptPropertyCount"] == 1
+
+
+def test_create_rejects_info_fragment_missing_script_name(tmp_path):
+    """OS-04: an INFO fragment with no scriptName is rejected before the CLI."""
+    spec = {"records": [{"type": "Quest", "editorId": "Q", "topics": [{"editorId": "T",
+        "responses": [{"lines": [{"text": "x"}], "fragment": {"onEnd": "Fragment_End"}}]}]}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_info_fragment_without_begin_or_end(tmp_path):
+    """OS-04: an INFO fragment with neither onBegin nor onEnd is rejected before the CLI."""
+    spec = {"records": [{"type": "Quest", "editorId": "Q", "topics": [{"editorId": "T",
+        "responses": [{"lines": [{"text": "x"}],
+                       "fragment": {"scriptName": "STF:Fragments:TopicInfos:TIF_Q_01000800"}}]}]}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_quest_with_info_fragment(real_env, staging_out):
+    """OS-04: a per-INFO TIF VMAD fragment persists — the DialogResponsesAdapter ScriptFragments
+    (single fragment script + OnEnd ScriptFragment) read back via the create_record QUST summary
+    AND the full fragment subtree (scriptName/onEnd.fragmentName) via the dialogue-dump. The INFO
+    FormKey is pinned so the TIF_<eid>_<8hex> name is deterministic. Metadata only (no .pex)."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os04InfoFragment.esp"
+    script = "STF:Fragments:TopicInfos:TIF_Os04Quest_01000800"
+    spec = {"records": [{
+        "type": "Quest", "editorId": "Os04Quest", "name": "Reward", "questType": "SideQuests",
+        "topics": [{"editorId": "Os04Reward", "name": "Reward", "responses": [{
+            "prompt": "Here is your reward.",
+            # pin the INFO id (>0x800 quest slot, no collision with auto-minted records) ->
+            # stable TIF_<eid>_<8hex> name across re-authoring.
+            "formKey": "000F00:Os04InfoFragment.esp",
+            "lines": [{"text": "Take this."}],
+            "fragment": {"scriptName": script, "onEnd": "Fragment_End",
+                         "properties": [{"name": "pReward", "type": "int", "value": 5}]},
+        }]}],
+    }]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    rec = data["records"][0]
+    assert rec["infoFragmentCount"] == 1
+    assert rec["infoFragmentScriptName"] == script
+
+    # full fragment subtree via the independent dialogue-dump read path.
+    info = _dump_infos(cfg, manifest, out, "Os04Quest")[0]
+    assert info["hasFragment"] is True
+    assert info["fragment"]["scriptName"] == script
+    assert info["fragment"]["onBegin"] is None
+    assert info["fragment"]["onEnd"]["fragmentName"] == "Fragment_End"
+    assert info["fragment"]["onEnd"]["scriptName"] == script
+    # the INFO FormKey was pinned (deterministic TIF name): the INFO is queryable by that exact
+    # FormID — the writer rejects an out-of-slot pin, so a found record proves the pin held.
+    pinned = fo4_inspect_record(cfg, manifest, str(out), "000F00")["data"]
+    assert pinned["found"] is True
+    assert pinned["records"][0]["record_type"] == "DialogResponses"
 
 
 def test_create_quest_with_alias_fragments(real_env, staging_out):
@@ -1603,6 +1783,113 @@ def test_inspect_sm_tree_node_children(real_env):
     assert d["childCount"] >= 1
 
 
+# ---------------- OS-15: Holotape (NOTE) / Terminal (TERM) / SMEN / SMBN ----------------
+
+def test_create_rejects_smen_without_event_type(tmp_path):
+    """An SMEN must declare an eventType (the listener it fires on) — Python-level reject."""
+    spec = {"records": [{"type": "smen", "editorId": "NoEvent"}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_terminal_non_list_bodytexts(tmp_path):
+    """Terminal bodyTexts must be a list of strings (shape check before the CLI)."""
+    spec = {"records": [{"type": "terminal", "editorId": "T", "bodyTexts": "nope"}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_note_negative_value(tmp_path):
+    """A holotape value must be a non-negative number (Python-level range check)."""
+    spec = {"records": [{"type": "note", "editorId": "N", "value": -5}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_os15_records_roundtrip(real_env, staging_out):
+    """OS-15: a program Holotape, a readable Terminal, a Story Manager Event node, and a Branch
+    node in one plugin. Each round-trips from the on-disk binary (readback proof) and is
+    independently queryable by a fresh overlay; the SMBN parent FormLink auto-adds the master.
+    Spriggit (2nd engine) confirms the record-type folders + key payloads."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os15Records.esp"
+    spec = {"records": [
+        {"type": "note", "editorId": "Os15Holo", "name": "Test Audio Log",
+         "holotapeType": "program", "programFile": "Interface\\HoloGames\\test.swf",
+         "value": 0, "weight": 0.1},
+        {"type": "terminal", "editorId": "Os15Term", "name": "Lab Terminal",
+         "headerText": "ROBCO INDUSTRIES (TM) TERMLINK", "text": "Welcome, Overseer.",
+         "bodyTexts": ["The reactor is stable.", "All systems nominal."]},
+        {"type": "smen", "editorId": "Os15Event", "eventType": "ScriptEvent",
+         "flags": ["Random"], "maxConcurrentQuests": 2,
+         "conditions": [{"function": "GetRandomPercent", "comparison": "LessThan", "value": 50}]},
+        {"type": "smbn", "editorId": "Os15Branch", "parent": _DMND_EVENT, "flags": ["Random"]},
+    ]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    assert "Fallout4.esm" in data["masters"]        # the SMBN parent auto-added it
+    holo, term, smen, smbn = data["records"]
+    # NOTE: program holotape — the Data-union discriminator + the .swf path are the proof
+    assert holo["holotapeType"] == "program"
+    assert holo["programFile"].endswith("test.swf")
+    assert holo["sound"] is None and holo["scene"] is None
+    # TERM: header/welcome banners + the two body paragraphs
+    assert term["headerText"].startswith("ROBCO")
+    assert term["welcomeText"] == "Welcome, Overseer."
+    assert term["bodyTextCount"] == 2
+    assert term["bodyTexts"] == ["The reactor is stable.", "All systems nominal."]
+    # SMEN: the event-type listener + Random flag + concurrency + condition
+    assert smen["eventType"] == "ScriptEvent"
+    assert smen["flags"] == 1                        # AStoryManagerNode.Flag.Random = 1
+    assert smen["maxConcurrentQuests"] == 2
+    assert smen["conditionCount"] == 1
+    # SMBN: parent link round-trip + Random flag (no event — branches don't listen)
+    assert smbn["parent"] == _DMND_EVENT
+    assert smbn["flags"] == 1
+    # independently queryable from a fresh overlay (4 distinct record types)
+    for eid, rtype in (("Os15Holo", "Holotape"), ("Os15Term", "Terminal"),
+                       ("Os15Event", "StoryManagerEventNode"), ("Os15Branch", "StoryManagerBranchNode")):
+        q = fo4_inspect_record(cfg, manifest, str(out), eid)["data"]
+        assert q["found"] is True
+        assert q["records"][0]["record_type"] == rtype
+    # Spriggit (2nd engine): record-type folders + key payloads
+    if (_REPO / "tools" / "spriggit" / "Spriggit.CLI.exe").exists():
+        yaml_dir = staging_out / "os15-yaml"
+        exp = fo4_spriggit_export(cfg, manifest, str(out), str(yaml_dir))
+        assert exp["data"]["ok"]
+        yamls = list(yaml_dir.rglob("*.yaml"))
+        blob = "\n".join(p.read_text(encoding="utf-8") for p in yamls)
+        assert any("Holotape" in str(p) for p in yamls)
+        assert any("Terminal" in str(p) for p in yamls)
+        assert any("StoryManagerEventNode" in str(p) for p in yamls)
+        assert "ScriptEvent" in blob                 # the SMEN event type
+        assert "Welcome, Overseer." in blob          # the terminal welcome text
+
+
+def test_create_holotape_sound_and_terminal_link(real_env, staging_out):
+    """OS-15: the FormLink holotape variants — a sound (audio-log) holotape pointing at a vanilla
+    SoundDescriptor, and a terminal-link holotape. Both auto-add the master and round-trip their
+    discriminator + linked FormKey, proving the Data union isn't program-only."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os15Holo2.esp"
+    snd = "0FB0DD:Fallout4.esm"   # a vanilla SoundDescriptor (NPCHumanEshowHello-ish range)
+    spec = {"records": [
+        {"type": "note", "editorId": "Os15SndHolo", "name": "Audio Diary",
+         "holotapeType": "sound", "sound": snd},
+        {"type": "terminal", "editorId": "Os15Term2", "name": "Linked Terminal",
+         "text": "Insert holotape."},
+    ]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    assert "Fallout4.esm" in data["masters"]
+    holo = data["records"][0]
+    assert holo["holotapeType"] == "sound"
+    assert holo["sound"] == snd
+    assert holo["programFile"] is None
+
+
 # ---------------- Faz 3 / W6.5 + W8: ACTI / LCTN / LCRT / ECZN base records ----------------
 
 def test_create_rejects_encounterzone_bad_level(tmp_path):
@@ -1675,6 +1962,30 @@ def test_create_activator_control_script(real_env, staging_out):
     assert "Fallout4.esm" in data["masters"]   # the object property's FormKey auto-added it
     rec = data["records"][0]
     assert rec["scriptCount"] == 1             # VMAD round-tripped from the on-disk binary
+
+
+def test_create_activator_with_model(real_env, staging_out):
+    """2026-06-26: a scripted workshop ACTI (the coupon showcase board) carries a world mesh +
+    placement bounds alongside its control script. Model(MODL) + ObjectBounds(OBND) round-trip
+    from the on-disk binary — previously 'deferred' on the ACTI writer."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "ActiModel.esp"
+    spec = {"records": [{
+        "type": "activator", "editorId": "DN_TestBoard", "name": "Display Board",
+        "model": "PrewarCoupons\\DN_CouponBoard.nif",
+        "objectBounds": [-64, -4, -40, 64, 4, 40],
+        "scripts": [{"name": "DN_CouponBoardScript"}],
+    }]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    rec = data["records"][0]
+    assert rec["modelFile"] == "PrewarCoupons\\DN_CouponBoard.nif"   # MODL survived to disk
+    assert rec["objectBounds"] == [-64, -4, -40, 64, 4, 40]          # OBND survived to disk
+    assert rec["scriptCount"] == 1                                   # VMAD still attached
+    # independently queryable as an Activator
+    q = fo4_inspect_record(cfg, manifest, str(out), "DN_TestBoard")["data"]
+    assert q["found"] is True and q["records"][0]["record_type"] == "Activator"
 
 
 # ---------------- Faz 3 / W8.5: door-link (XTEL) teleport ----------------
@@ -2055,3 +2366,346 @@ def test_create_misc_preview_transform(real_env, staging_out):
     recs = fo4_create_record(cfg, manifest, spec, str(out))["data"]["records"]
     rec = [r for r in recs if r["formKey"].endswith(":CouponPtrn.esp")][0]
     assert rec["previewTransform"] == "1CF028:Fallout4.esm"
+
+
+# ---------------- OS-14: NPC Essential/Protected flags + OTFT outfit ----------------
+
+def test_create_rejects_npc_non_list_flags(tmp_path):
+    spec = {"records": [{"type": "Npc", "editorId": "X", "flags": "Essential"}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_npc_bad_flag(real_env, staging_out):
+    """The CLI is authoritative for Npc.Flag names: a bad flag fails the write."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os14BadFlag.esp"
+    spec = {"records": [{"type": "Npc", "editorId": "BadFlag", "flags": ["Nope"]}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(cfg, manifest, spec, str(out))
+
+
+def test_create_npc_with_flags(real_env, staging_out):
+    """OS-14: a quest-critical NPC with Essential+Protected so it can't die pre-turn-in.
+    The raw actor-flags bitfield round-trips: Essential(2)|Protected(256) = 258."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os14Flags.esp"
+    spec = {"records": [{
+        "type": "Npc", "editorId": "Os14Kerem", "name": "Quest Giver",
+        "race": "013746:Fallout4.esm",
+        "flags": ["Essential", "Protected"],
+    }]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    rec = data["records"][0]
+    # Essential(0x02) | Protected(0x800) bits both set in the round-tripped bitfield
+    assert rec["flags"] & 0x02
+    assert rec["flags"] & 0x800
+
+
+def test_create_rejects_outfit_non_list_items(tmp_path):
+    spec = {"records": [{"type": "Outfit", "editorId": "O", "items": "nope"}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_outfit_roundtrip(real_env, staging_out):
+    """OS-14: an OTFT outfit referencing a vanilla ARMO. itemCount round-trips, the
+    item FormLink auto-adds the master, and the record is independently queryable."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os14Outfit.esp"
+    spec = {"records": [{
+        "type": "Outfit", "editorId": "Os14Outfit",
+        "items": ["07B9C8:Fallout4.esm"],   # a vanilla leather-torso ARMA/ARMO target
+    }]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    assert "Fallout4.esm" in data["masters"]
+    assert data["records"][0]["itemCount"] == 1
+    q = fo4_inspect_record(cfg, manifest, str(out), "Os14Outfit")["data"]
+    assert q["found"] is True and q["records"][0]["record_type"] == "Outfit"
+
+
+# ---------------- OS-01: WEAP weapon base record ----------------
+
+def test_create_rejects_weapon_negative_base_damage(tmp_path):
+    spec = {"records": [{"type": "Weapon", "editorId": "W", "baseDamage": -1}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_weapon_bad_animation_type(tmp_path):
+    spec = {"records": [{"type": "Weapon", "editorId": "W", "animationType": "Laser"}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_weapon_ammo_capacity_out_of_range(tmp_path):
+    spec = {"records": [{"type": "Weapon", "editorId": "W", "ammoCapacity": 99999}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_weapon_non_list_attach_slots(tmp_path):
+    spec = {"records": [{"type": "Weapon", "editorId": "W", "attachParentSlots": "nope"}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_weapon_roundtrip(real_env, staging_out):
+    """OS-01: a full WEAP — DNAM stats + ammo FormLink + animationType + keywords. Every
+    stat reads back from the on-disk binary and the ammo FormLink auto-adds the master."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os01Weapon.esp"
+    spec = {"records": [{
+        "type": "Weapon", "editorId": "Os01PipeRifle", "name": "Test Pipe Rifle",
+        "value": 50, "weight": 4.5, "baseDamage": 25, "speed": 1.0, "reach": 1.0,
+        "ammoCapacity": 10, "animationType": "Gun",
+        "ammo": "01F279:Fallout4.esm",       # 10mm ammo (vanilla)
+        "keywords": ["0AEC5B:Fallout4.esm"],
+    }]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    assert "Fallout4.esm" in data["masters"]
+    rec = data["records"][0]
+    assert rec["baseDamage"] == 25
+    assert rec["ammoCapacity"] == 10
+    assert rec["animationType"] == "Gun"
+    assert rec["ammo"] == "01F279:Fallout4.esm"
+    assert rec["value"] == 50 and rec["keywordCount"] == 1
+    q = fo4_inspect_record(cfg, manifest, str(out), "Os01PipeRifle")["data"]
+    assert q["found"] is True and q["records"][0]["record_type"] == "Weapon"
+
+
+# ---------------- OS-11: glue-record field widening ----------------
+
+def test_create_rejects_message_button_without_text(tmp_path):
+    spec = {"records": [{"type": "Message", "editorId": "M",
+                         "menuButtons": [{"conditions": []}]}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_faction_vendor_bad_hour(tmp_path):
+    spec = {"records": [{"type": "Faction", "editorId": "F",
+                         "vendorValues": {"startHour": 99999}}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_leveled_chance_none_out_of_range(tmp_path):
+    spec = {"records": [{"type": "LeveledItem", "editorId": "L", "chanceNone": 150}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_message_with_buttons(real_env, staging_out):
+    """OS-11: a MESG with a MessageBox flag + 2 menu buttons (choice dialog). buttonCount
+    and the flag bitfield round-trip from the on-disk binary."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os11Message.esp"
+    spec = {"records": [{
+        "type": "Message", "editorId": "Os11Choice", "name": "Pick One", "text": "Choose:",
+        "flags": ["MessageBox"],
+        "menuButtons": [{"text": "Yes"}, {"text": "No"}],
+    }]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    rec = data["records"][0]
+    assert rec["buttonCount"] == 2
+    assert rec["flags"] & 0x01            # MessageBox bit
+    assert [b["text"] for b in rec["buttons"]] == ["Yes", "No"]
+
+
+def test_create_faction_ranks_and_vendor(real_env, staging_out):
+    """OS-11: a FACT with 2 Ranks (gendered titles) + VendorValues. rankCount and the
+    vendor-data presence round-trip from the on-disk binary."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os11Faction.esp"
+    spec = {"records": [{
+        "type": "Faction", "editorId": "Os11Merchants", "name": "Traders",
+        "ranks": [
+            {"number": 0, "title": "Initiate"},
+            {"number": 1, "title": "Trader", "titleFemale": "Tradeswoman"},
+        ],
+        "vendorValues": {"startHour": 8, "endHour": 20, "radius": 1000,
+                         "buysStolen": True},
+    }]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    rec = data["records"][0]
+    assert rec["rankCount"] == 2
+    assert rec["hasVendorValues"] is True
+
+
+def test_create_leveled_chance_none(real_env, staging_out):
+    """OS-11: chanceNone (loot tuning) round-trips on both a LeveledItem and a LeveledNpc
+    as the authored 0-100 integer percent."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os11Leveled.esp"
+    spec = {"records": [
+        {"type": "LeveledItem", "editorId": "Os11Lvli", "chanceNone": 25,
+         "entries": [{"reference": "00000F:Fallout4.esm", "level": 1, "count": 1}]},
+        {"type": "LeveledNpc", "editorId": "Os11Lvln", "chanceNone": 40},
+    ]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    lvli = [r for r in data["records"] if r["formKey"].endswith(":Os11Leveled.esp")
+            and r["type"] == "LeveledItem"][0]
+    lvln = [r for r in data["records"] if r["type"] == "LeveledNpc"][0]
+    assert lvli["chanceNone"] == 25
+    assert lvln["chanceNone"] == 40
+
+
+# ---------------- OS-02: STAT/DOOR/LIGH/CONT/ALCH/INGR base records ----------------
+
+def test_create_rejects_container_item_without_item(tmp_path):
+    spec = {"records": [{"type": "Container", "editorId": "C",
+                         "inventory": [{"count": 5}]}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_ingestible_effect_without_base_effect(tmp_path):
+    spec = {"records": [{"type": "Ingestible", "editorId": "A",
+                         "effects": [{"magnitude": 25}]}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_light_negative_radius(tmp_path):
+    spec = {"records": [{"type": "Light", "editorId": "L", "radius": -5}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_door_bad_flag(real_env, staging_out):
+    """The CLI is authoritative for Door.Flag names: a bad flag fails the write."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os02BadDoor.esp"
+    spec = {"records": [{"type": "Door", "editorId": "BadDoor", "flags": ["Nope"]}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(cfg, manifest, spec, str(out))
+
+
+def test_create_world_base_records_os02(real_env, staging_out):
+    """OS-02: a STAT + DOOR + LIGH + CONT + ALCH + INGR in one plugin. Each round-trips
+    from the on-disk binary; FormLinks (container item, ALCH/INGR base effect) auto-add the
+    master; each is independently queryable as its record type."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os02Base.esp"
+    spec = {"records": [
+        {"type": "Static", "editorId": "Os02Stat", "name": "Prop",
+         "model": "Props\\testprop.nif"},
+        {"type": "Door", "editorId": "Os02Door", "name": "Test Door",
+         "model": "Doors\\testdoor.nif", "flags": ["Automatic"],
+         "keywords": ["01CA72:Fallout4.esm"]},
+        {"type": "Light", "editorId": "Os02Light", "name": "Test Light",
+         "radius": 512, "value": 10, "weight": 0.5, "flags": ["CanBeCarried"]},
+        {"type": "Container", "editorId": "Os02Cont", "name": "Stash",
+         "flags": ["Respawns"],
+         "inventory": [{"item": "00000F:Fallout4.esm", "count": 50}]},  # Caps
+        {"type": "Ingestible", "editorId": "Os02Chem", "name": "Test Chem",
+         "value": 20, "weight": 0.1, "flags": ["Medicine"],
+         "effects": [{"baseEffect": "00366D:Fallout4.esm", "magnitude": 25, "duration": 0}]},
+        {"type": "Ingredient", "editorId": "Os02Ingr", "name": "Test Herb",
+         "value": 5, "weight": 0.1,
+         "effects": [{"baseEffect": "00366D:Fallout4.esm", "magnitude": 10}]},
+    ]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    assert "Fallout4.esm" in data["masters"]
+    by_eid = {r["formKey"]: r for r in data["records"]}
+    recs = list(by_eid.values())
+    stat = [r for r in recs if r["type"] == "Static"][0]
+    door = [r for r in recs if r["type"] == "Door"][0]
+    light = [r for r in recs if r["type"] == "Light"][0]
+    cont = [r for r in recs if r["type"] == "Container"][0]
+    alch = [r for r in recs if r["type"] == "Ingestible"][0]
+    ingr = [r for r in recs if r["type"] == "Ingredient"][0]
+    assert stat["modelFile"] == "Props\\testprop.nif"
+    assert door["keywordCount"] == 1 and door["flags"] & 0x02   # Automatic
+    assert light["radius"] == 512 and light["value"] == 10
+    assert cont["itemCount"] == 1
+    assert alch["effectCount"] == 1
+    assert ingr["effectCount"] == 1
+    for eid, rtype in (("Os02Stat", "Static"), ("Os02Door", "Door"),
+                       ("Os02Light", "Light"), ("Os02Cont", "Container"),
+                       ("Os02Chem", "Ingestible"), ("Os02Ingr", "Ingredient")):
+        q = fo4_inspect_record(cfg, manifest, str(out), eid)["data"]
+        assert q["found"] is True
+        assert q["records"][0]["record_type"] == rtype
+
+
+# ---------------- OS-08: COBJ constructible (crafting recipe) ----------------
+
+def test_create_rejects_cobj_without_created_object(tmp_path):
+    spec = {"records": [{"type": "ConstructibleObject", "editorId": "R",
+                         "workbenchKeyword": "00FB8C:Fallout4.esm"}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_cobj_without_workbench(tmp_path):
+    spec = {"records": [{"type": "ConstructibleObject", "editorId": "R",
+                         "createdObject": "00000F:Fallout4.esm"}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_cobj_components_not_list(tmp_path):
+    spec = {"records": [{"type": "ConstructibleObject", "editorId": "R",
+                         "createdObject": "00000F:Fallout4.esm",
+                         "workbenchKeyword": "00FB8C:Fallout4.esm",
+                         "components": "nope"}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_rejects_cobj_component_without_formkey(tmp_path):
+    spec = {"records": [{"type": "ConstructibleObject", "editorId": "R",
+                         "createdObject": "00000F:Fallout4.esm",
+                         "workbenchKeyword": "00FB8C:Fallout4.esm",
+                         "components": [{"count": 2}]}]}
+    with pytest.raises(Fo4McpError):
+        fo4_create_record(_cfg(tmp_path), _MANIFEST, spec, "staging/x.esp")
+
+
+def test_create_cobj_roundtrip(real_env, staging_out):
+    """OS-08: a COBJ crafting recipe — output + workbench keyword + components + a condition
+    gate. componentCount/conditionCount/createdObject round-trip from the on-disk binary and
+    the component/output FormLinks auto-add the master. The 'cobj' alias is accepted too."""
+    cfg, manifest = real_env
+    _skip_if_no_writer(cfg, manifest)
+    out = staging_out / "Os08Cobj.esp"
+    spec = {"records": [{
+        "type": "cobj", "editorId": "Os08Recipe",
+        "createdObject": "00000F:Fallout4.esm",          # output (Caps as a stand-in)
+        "workbenchKeyword": "00FB8C:Fallout4.esm",        # a vanilla workbench keyword
+        "createdObjectCount": 1,
+        "components": [{"component": "00106D:Fallout4.esm", "count": 2}],  # Steel scrap
+        "categories": ["01CA72:Fallout4.esm"],
+        "conditions": [{"function": "GetItemCount", "comparison": "GreaterThanOrEqualTo",
+                        "value": 1.0, "param1": "00106D:Fallout4.esm"}],
+    }]}
+    data = fo4_create_record(cfg, manifest, spec, str(out))["data"]
+    assert data["wrote"] is True
+    assert "Fallout4.esm" in data["masters"]
+    rec = data["records"][0]
+    assert rec["createdObject"] == "00000F:Fallout4.esm"
+    assert rec["workbenchKeyword"] == "00FB8C:Fallout4.esm"
+    assert rec["componentCount"] == 1
+    assert rec["categoryCount"] == 1
+    assert rec["conditionCount"] == 1
+    assert rec["createdObjectCount"] == 1
+    q = fo4_inspect_record(cfg, manifest, str(out), "Os08Recipe")["data"]
+    assert q["found"] is True and q["records"][0]["record_type"] == "ConstructibleObject"

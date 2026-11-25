@@ -67,8 +67,11 @@ def fo4_build_seq(cfg: Config, plugin: str, *, dry_run: bool = True) -> dict[str
     from .ck_run import run_ck_via_mo2
 
     timeout = max(cfg.subprocess_timeout, 1800)
+    # No expected_outputs: a plugin with no start-game-enabled quest correctly emits NO .seq (see
+    # docstring), so an empty overwrite is NOT a failure. artifacts_ok folds in only the ckpe.log scan.
     r = run_ck_via_mo2(cfg, command[1:], timeout=timeout)
     return ok({
         "command": command, "ck_exe": ck_exe, "plugin": plugin, "dry_run": False,
-        "via": "mo2-vfs", "ok": r["exited"] and not r["timed_out"], **r, "warning": _WARNING,
+        "via": "mo2-vfs", "ok": r["exited"] and not r["timed_out"] and r["artifacts_ok"],
+        **r, "warning": _WARNING,
     })

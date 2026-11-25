@@ -120,8 +120,10 @@ reference and is robust to all of those. **Recommendation for Kerem: prefer `Get
 Subject==alias 0** (the forced-filled Kerem alias), keeping `GetIsID` Subject==`000802` only
 as the documented fallback. *Implementation note:* the `GetIsAliasRef` alias index goes in
 the condition's **number/alias slot** (`ParameterOneNumber` / `Unknown3`), **not** as a
-FormKey — and `dialogue-dump` currently mis-renders that slot as a FormKey (a known display
-artifact; `_re_min02.json`'s `param1:000004` is really alias 4, not a Door).
+FormKey. **(OS-13, done):** `dialogue-dump` now renders the alias index from the number slot
+via `Condition.GetParameterTypes(Function)` (the slot's `ParameterType` — `Alias` → number,
+record types → FormKey), and surfaces `paramType1`/`paramType2` so a consumer can tell
+number-vs-form unambiguously. The old mis-render (showing the slot as a FormKey) is fixed.
 
 ### 2.5 Player choice → NPC reply: speaker and "Link To" (final, corrected)
 
@@ -175,10 +177,14 @@ data, so you reach the quest via `GetOwningQuest()`). Locals `akSpeaker`/`akActo
 **1,796** vanilla INFOs use this; 39 use both. Needed when the line must run more than a bare
 stage set (e.g. `player.AddItem(reward)` + `Debug.Notification`).
 
-**Both are AUTHORABLE OUTSIDE THE CK** (both Mutagen properties are `canWrite=True`) and are
-**missing from the writer** — the central gap. The QUST path already emits the identical
-`{ScriptName, FragmentName}` shape (`QuestScriptFragment`, `Program.cs:1908–1917`), so the
-INFO-fragment plumbing is a pattern-replica, not new research.
+**Both are AUTHORABLE OUTSIDE THE CK** (both Mutagen properties are `canWrite=True`). **(OS-04,
+done):** the INFO TIF VMAD fragment is now wired — `ResponseSpec.Fragment {scriptName, onBegin?,
+onEnd?, flags?, properties?}` → `info.VirtualMachineAdapter = new DialogResponsesAdapter{Version=6,
+ObjectFormat=2, ScriptFragments{Script, OnBegin?, OnEnd?}}` (reuses `BuildScriptEntry`, mirrors the
+QUST `QuestScriptFragment` path). `ResponseSpec.FormKey` pins the INFO id so the `TIF_<eid>_<8hex>`
+name stays stable across re-authoring. The QUST read-back surfaces `infoFragmentCount` /
+`infoFragmentScriptName`, and `dialogue-dump` emits the full `fragment{scriptName, onBegin, onEnd}`
+subtree. Metadata only — the `.pex` is still compiled separately (fo4_papyrus_build / Caprica).
 
 ### 2.7 GREETING vs Scene vs branch
 
@@ -335,15 +341,15 @@ from the design narrative or wire a real counter.*
 
 | Gap | canEmit | Why needed | Effort | Mutagen-authorable? |
 |-----|---------|-----------|--------|---------------------|
-| **INFO `SetParentQuestStage` (SNAM)** | **no** | Script-free "pick line → SetStage" — lowest-friction Kerem fix; no Caprica | **S** | Yes (`canWrite=True`, unused) |
-| **INFO Papyrus fragment (TIF VMAD)** | **no** | Arbitrary Papyrus on a line (`AddItem`+`Notification`+conditional) — reward-granting turn-in | **M** | Yes (API ready; reuse `BuildScriptEntry`) |
+| ~~**INFO `SetParentQuestStage` (SNAM)**~~ **(done)** | **yes** | Script-free "pick line → SetStage" — lowest-friction Kerem fix; no Caprica. Round-trip test added (OS-05). | **S** | Yes (`canWrite=True`) |
+| ~~**INFO Papyrus fragment (TIF VMAD)**~~ **(done, OS-04)** | **yes** | Arbitrary Papyrus on a line (`AddItem`+`Notification`+conditional) — reward-granting turn-in. `ResponseSpec.Fragment` + `FormKey` pin; round-trip via `infoFragmentCount` + `dialogue-dump`. | **M** | Yes (reuses `BuildScriptEntry`) |
 | **INFO chaining (Topic link / StartScene / StartScenePhase / PreviousDialog)** | **no** | Real branching (choice → specific NPC reply / kick a Scene) beyond flat one-INFO-per-topic | **M** | Yes (fields exist, unwired) |
 | **NPC `Flags` (Essential/Protected/…)** | **no** | Keep Kerem alive through the ambush until turn-in. `npc.Flags` never set; `RecordSpec.Flags` is consumed by quest/faction/leveled cases, not NPC | **S** | Yes (plain bitfield) |
 | **`type=outfit` (OTFT record)** | **no** | Author a bespoke outfit. (Kerem can reuse a vanilla OTFT, so this is not on the critical path) | **S** | Yes (`mod.Outfits.AddNew`, `Items` list) |
 | **Multi-input `Package.Data` map** | partial | Only single `DataLocation` wired; full input index-map deferred (wrong sbyte index silently breaks AI) | **M** | Yes (research gate on the index-map) |
-| **`dialogue-dump` of script-bearing INFOs** | partial | Dump reads prompt/speaker/responseCount/conditions only (529–542); blind to SNAM/VMAD → cannot verify P0/P2 by dump alone | **S** | Yes |
+| ~~**`dialogue-dump` of script-bearing INFOs**~~ **(done, OS-13)** | **yes** | Dump now emits per-INFO `setStageOnBegin/setStageOnEnd` (SNAM), the full `fragment{scriptName,onBegin,onEnd}` (VMAD), `previousDialog/linkTopic/startScene/startScenePhase` link fields, and correctly-rendered condition params (number/string/form via `GetParameterTypes`) + `aliasRunOn` — P0/P2 verifiable by dump alone. | **S** | Yes |
 | **Player-topic speaker convention** | partial | Writer faithfully emits whatever speaker is given; needs a "player topic ⇒ force speaker None" authoring rule or guard | **S** | Authoring convention |
-| **GetIsAliasRef alias-index param** | partial | `BuildCondition` must emit the alias index in the number/alias slot, not as a FormKey (for the §2.4 recommendation) | **S** | Verify `SetParam`/`AliasRunOn` path |
+| ~~**GetIsAliasRef alias-index param**~~ **(done, OS-13)** | **yes** | Writer already emits the alias index in the number slot (`SetParam`→`ParameterOneNumber`); `dialogue-dump` now also *renders* it from the number slot via `GetParameterTypes` (was mis-shown as a FormKey). Round-trip test asserts `param1=="4"` / `paramType1=="Alias"`. | **S** | — |
 
 **Decisive finding:** `canEmitInfoFragment = NO` today, but it is **plumbing, not a library
 limitation**. The writer emits VMAD adapters only for QUST (1879) and ACTI (2539); the
@@ -369,8 +375,10 @@ serialize + the Tier-3 `fo4_run_ingame_test` runner).
     `info.SetParentQuestStage = new DialogSetParentQuestStage { OnBegin = (short)(spec.OnBegin ?? -1), OnEnd = (short)(spec.OnEnd ?? -1) }`.
   - Python normalizer (`mcp-server/fo4_mcp/tools.py`, response normalization ~1377–1439):
     pass through `setParentQuestStage`.
-- **Tests:** writer round-trip — author an INFO with `setParentQuestStage.onEnd=20`, reopen
-  the ESP via Mutagen overlay, assert `info.SetParentQuestStage.OnEnd == 20`.
+- **Tests:** **(done, OS-05)** writer round-trip — author an INFO with `setParentQuestStage.onEnd=20`
+  plus a no-SNAM control INFO, reopen via the read-only `dialogue-dump` and assert the
+  SNAM-bearing INFO's `setStageOnEnd == 20` / `setStageOnBegin == -1` and the control's
+  `setStageOnEnd`/`setStageOnBegin` are `null` (`test_create_quest_info_set_parent_quest_stage`).
 - **Acceptance:** SNAM survives round-trip; `dialogue-dump` (after P3) reports it.
 - **Mutagen-authorable.** Likely the **first thing to ship** — alone it could fix Kerem's
   accept (→20) and turn-in (→100) with no `.pex`. (Reward `AddItem` still needs P2.)

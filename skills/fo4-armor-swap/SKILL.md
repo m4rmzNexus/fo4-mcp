@@ -1,111 +1,101 @@
 ---
 name: fo4-armor-swap
 description: |
-  End-to-end authoring of a Fallout 4 armor variant: clone or swap an armor
-  record (ARMO/ARMA), change its material/keywords/stats or model, add a
-  craftable recipe (COBJ), and ship it ESL-flagged — all through the Spriggit
-  YAML loop, with the mesh/texture/material GUI steps flagged. Use when the user
-  wants to "make an armor mod", "retexture this armor", "swap the model",
-  "create an armor variant", "add a craftable outfit", or continue the
-  fixtures/armor-swap-test flow.
+  Create or repair a Fallout 4 armor variant end to end: stats or keyword
+  variant, material swap, model swap or new armor (ARMO/ARMA), craftable recipe
+  (COBJ), materials and textures, and release flags. Use when the user wants to
+  "make an armor mod", "retexture this armor", "swap the model", "create an
+  armor variant", "add a craftable outfit", fix a worn appearance, or continue
+  the fixtures/armor-swap-test flow.
 ---
 
 # fo4-armor-swap
 
-The first composite authoring workflow (T1). Builds an armor variant by chaining
-`fo4-record-edit` (record plumbing) and `fo4-papyrus` (if scripted), and points
-at the GUI tools for the art assets it can't drive. The record half is fully
-tool-driven and version-controlled; the art half is manual but sequenced.
-
-Worked fixture: `fixtures/armor-swap-test/seed/` (telifsiz `test_armor.esp` +
-serialized YAML) is the reproducible example to test the loop against.
+Composite authoring workflow. Chains `fo4-record-edit` (record plumbing),
+`fo4-papyrus` (if scripted) and `fo4-package-release`, and sequences the art
+steps the tools cannot drive. Worked fixture: `fixtures/armor-swap-test/seed/`
+(a small copyright-free plugin plus serialized YAML) for testing the loop.
 
 ## Decide the swap type first
 
-| Type | What changes | Needs new art? | Effort |
+| Type | What changes | New art? | Effort |
 |---|---|---|---|
-| **Material swap (MSWP)** | textures only, same mesh | new BGSM + textures | low |
 | **Stat/keyword variant** | AV, value, keywords, mods | none | lowest |
-| **Model swap** | mesh (NIF) | new/edited NIF | medium |
-| **New armor** | everything | mesh + textures + material | high |
+| **Material swap (MSWP)** | materials/textures, same mesh | BGSM + DDS | low |
+| **Model swap** | worn mesh (ARMA model) | edited NIF | medium |
+| **New armor** | everything | mesh + material + textures | high |
 
-Pick the lowest type that meets the goal (principle: simplicity first).
+Pick the lowest type that meets the goal. What the player sees **equipped**
+comes from the ARMA models for the body and perspective; the ARMO world model
+only covers the dropped item. Changing the inventory or world model alone does
+not change the worn appearance.
 
 ## Steps
 
-1. **Pre-flight.** Run `fo4-setup-check`. Confirm MO2 mode + Spriggit live.
+1. **Pre-flight.** Run `fo4-setup-check` for `mutagen-cli` / `spriggit`.
 
-2. **Inspect the source.** `fo4_inspect_record(plugin, armor_formid)` on the
-   vanilla/base ARMO. Note its `ArmorAddon` (ARMA) link, keywords, material
-   (`BOD2`/biped slots), value/weight, and any `Object Template`/OMOD.
+2. **Inspect the source.** `fo4_inspect_record(plugin, armor_id)` on the base
+   ARMO. Note its ArmorAddon (ARMA) links, biped slots (`BOD2`), keywords,
+   value/weight and any object template / OMOD. Inspect each ARMA for the race,
+   sex and first/third-person models that matter.
 
-3. **Export to staging.** `fo4_spriggit_export(plugin, staging/<name>-yaml/)`.
+3. **Author the record.**
+   - **Stat/keyword variant:** edit the ARMO fields through the Spriggit loop
+     (`fo4-record-edit`). Keep the existing ARMA links.
+   - **Material swap:** read the original material paths on the actual mesh.
+     Write the replacement with `fo4_create_bgsm(output, fields, template=<original .bgsm>)`
+     and the textures with `fo4_encode_texture` (diffuse `BC7_UNORM_SRGB`,
+     normal `BC5_UNORM`, spec/mask `BC7_UNORM`). Author an MSWP (substitutions
+     original -> replacement) and hang it on the model that is actually worn.
+     A matching filename on a different model does not exercise the swap.
+   - **Model swap:** point the ARMA model(s) at the new NIF.
+   - **New armor:** author ARMO + ARMA as new records (`fo4_create_record` for
+     ARMO, Spriggit YAML for anything it does not cover), FormIDs >= `0x800`.
 
-4. **Author the record (YAML edit, via fo4-record-edit).**
-   - **Stat/keyword variant:** edit the ARMO fields directly.
-   - **Material swap:** add a `MaterialSwap` (MSWP) record + reference it from
-     the ARMO (`Material Swap` field), pointing at your new BGSM paths.
-   - **Model swap:** point the ARMA `Model` (and `2nd Model`/world model) at the
-     new NIF path.
-   - **New armor:** author ARMO + ARMA as new records (Spriggit deserializes
-     hand-written YAML — no CK needed), FormIDs ≥ `0x800`.
+4. **Craftable recipe (optional).** `fo4_create_record` with a
+   `constructibleobject`: `createdObject` = the ARMO, `workbenchKeyword` =
+   `WorkbenchArmor`, components and conditions. Read back target, workbench,
+   conditions and requirements.
 
-5. **Craftable recipe (optional).** Author a COBJ: `Created Object` = your ARMO,
-   `Workbench Keyword` = `WorkbenchArmor`, components + perk/condition. Lets the
-   player build it at the armor workbench.
+5. **Distribution (optional).** Inject into leveled lists without editing them
+   via `leveleditemoverride` (additive) or a hand-written SPID `_DISTR.ini`.
+   Keep IDs referenced by external configs stable.
 
-6. **Distribution (optional).** To inject into leveled lists / vendors without
-   editing them directly, generate a SPID-F4 `_DISTR.ini` (keeps the plugin
-   conflict-free). SPID config generation is a V2 tool (`docs/V2-backlog.md`);
-   for now hand-write the INI and document it.
+6. **Diff + import.** `fo4_spriggit_import` without confirm -> review the diff ->
+   re-call with `confirm_overwrite=True`. Output lands in `staging/`.
 
-7. **Diff + import.** `fo4_spriggit_import` WITHOUT confirm → review diff →
-   re-call with `confirm_overwrite=True`. Output plugin lands in `staging/`.
+7. **Worn geometry (manual GUI, do not skip).** For new or edited worn meshes:
+   OutfitStudio/BodySlide for skinning, weighting, slot fit and body-preset
+   sliders. The MCP geometry writer (`fo4_nif_build`) only handles plain static
+   shapes; it refuses skinned meshes.
 
-8. **Art assets (manual GUI — sequence, don't skip).**
-   - **Mesh:** OutfitStudio (`tools/bodyslide/...`) to conform/edit the NIF, build
-     BodySlide sliders so it fits body presets.
-   - **Material:** Material Editor (`tools/material-editor/Material Editor.exe`) to
-     author the BGSM/BGEM pointing at your textures.
-   - **Textures:** author, then Cathedral Assets Optimizer (`tools/cao/...`) to
-     BC-compress + generate mipmaps + fix the NIF for the AE runtime.
-
-9. **Install + test.** Drop the staged plugin + assets into an MO2 mod folder
-   under `tools/mo2/portable-fo4-agentic/mods/<ModName>/` (Data-relative layout),
-   activate, launch, verify in-game (console `help "<name>" 4 ARMO`, craft, equip).
+8. **Install + test.** The user installs the staged plugin and assets as an MO2
+   mod in the target test profile. Verify in game: `help "<name>" 4 ARMO`,
+   craft at the armor workbench, equip, check every requested body and
+   perspective. Record inspection, crafting availability and fit are separate
+   results; report which ones were observed.
 
 ## Guards (community best-practice)
 
-- **FormID range — the 0x800–0xFFF window.** SPID-F4 and distributors silently
-  drop records below `0x800`; ESL eligibility caps new-record ObjectIDs at
-  `0xFFF`. So a distributable, ESL-able armor authors its new records in
-  **`0x800`–`0xFFF`**. Stay in that window.
-- **Armor is the ESL textbook case.** Armor mods add records (ARMO/ARMA/OMOD/
-  MISC/COBJ/keywords) but no new cells → ESL-flag by default (< 2048 new
-  records). Saves a precious full load-order slot. Run `fo4-package-release`
-  for the eligibility check; never have the END USER compact FormIDs.
-- **AWKCR is deprecated (2025+).** Do NOT add an AWKCR (Armor & Weapon Keywords
-  Community Resource) dependency to a new armor mod — it's heavy, conflict-prone,
-  and stalled. Use vanilla keywords + a minimal custom keyword set; author a new
-  INNR (Instance Naming Rule) only when you introduce new keywords.
-- **BA2 naming is load-bearing.** If you pack assets, the archives MUST be named
-  `<ModName> - Main.ba2` (meshes/scripts) and `<ModName> - Textures.ba2`
-  (textures, separate) or the game won't auto-attach them → invisible mesh /
-  missing texture. Ship v1 header for max compatibility (see `fo4-package-release`).
-- **Biped slots must not collide** with what the player wears alongside it
-  (check `BOD2` slot flags); slot conflicts = invisible/clipping armor.
-- **Material swap > mesh edit** when only textures change — cheaper, no NIF risk.
-- **Keep ARMO↔ARMA wiring intact.** An ARMO with a broken ArmorAddon link shows
-  nothing equipped.
-- **Precombines N/A for armor** (not worldspace-placed) — but if you ALSO place
-  the armor as a static in a cell, see the precombine guard in `fo4-record-edit`.
-- **CAO is mandatory for shipped textures** — uncompressed/wrong-format DDS
-  tanks VRAM and can CTD on the AE runtime.
+- **FormID window 0x800-0xFFF.** SPID drops records below `0x800`; ESL caps new
+  ObjectIDs at `0xFFF`. A distributable, ESL-able armor stays in that window.
+- **Armor is the ESL textbook case.** Records only, no new cells -> ESL-flag by
+  default (< 2048 new records). Confirm with `fo4_plan_plugin_format`; the end
+  user never compacts FormIDs.
+- **No AWKCR dependency.** Deprecated and conflict-prone; use vanilla keywords
+  plus a minimal custom set, and a new INNR only for new keywords.
+- **BA2 naming is load-bearing.** `<Plugin> - Main.ba2` and
+  `<Plugin> - Textures.ba2` (separate) or the game won't attach them
+  (`fo4-package-release`).
+- **Biped slots must not collide** with what is worn alongside (`BOD2`);
+  collisions = invisible or clipping armor.
+- **Material swap before mesh edit** when only the look changes.
+- **Keep ARMO <-> ARMA wiring intact.** A broken ArmorAddon link shows nothing
+  equipped.
+- **Shipped textures must be BC-compressed with mips.** Uncompressed or wrong
+  DDS formats waste VRAM and can crash the AE runtime.
 
 ## Notes
 
-- Pairs with `fo4-record-edit` (the YAML loop), `fo4-papyrus` (if the armor has a
-  script, e.g. an effect on equip), and `fo4-package-release` (ESL + BA2 + FOMOD).
-- BA2 packing of the final assets is a V2 gap (`docs/V2-backlog.md` #4); for now
-  ship loose files or pack manually with `tools/xedit/BSArch64.exe` (mind the
-  v1-vs-v7/v8 header version for AE/NG).
+- Pairs with `fo4-record-edit`, `fo4-papyrus` (equip effects) and
+  `fo4-package-release` (flags, BA2, FOMOD, ZIP check).

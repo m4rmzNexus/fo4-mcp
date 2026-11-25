@@ -48,6 +48,14 @@ _STEPS: dict[str, tuple[str, bool]] = {
     "build_cdx":   ("-BuildCDX", False),
 }
 
+# step -> expected artifact token(s) the CK op must drop into the MO2 overwrite (substring
+# match against overwrite_new). Only steps with a PROVEN single named artifact assert here
+# (precombined -> CombinedObjects.esp, proven 2026-06-21); previs/compress_psg/build_cdx emit
+# loose-dir or load-order-dependent outputs, so they rely on the ckpe.log error scan only.
+_STEP_OUTPUTS: dict[str, list[str]] = {
+    "precombined": ["CombinedObjects.esp"],
+}
+
 # canonical previs pipeline order for step="full"
 _FULL_ORDER = ("precombined", "compress_psg", "build_cdx", "previs")
 
@@ -146,10 +154,11 @@ def fo4_build_previs(
     timeout = max(cfg.subprocess_timeout, 3600)
     results: list[dict[str, Any]] = []
     all_ok = True
-    for cmd in commands:
+    for s, cmd in zip(steps, commands):
         # cmd[0] is ck_exe; MO2 launches CK itself, so pass only the CK flag args
-        r = run_ck_via_mo2(cfg, cmd[1:], timeout=timeout)
-        all_ok = all_ok and r["exited"] and not r["timed_out"]
+        r = run_ck_via_mo2(cfg, cmd[1:], timeout=timeout,
+                           expected_outputs=_STEP_OUTPUTS.get(s))
+        all_ok = all_ok and r["exited"] and not r["timed_out"] and r["artifacts_ok"]
         results.append({"argv": cmd, **r})
 
     return ok({

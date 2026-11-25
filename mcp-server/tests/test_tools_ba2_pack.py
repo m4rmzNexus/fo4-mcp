@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import struct
 import sys
 from pathlib import Path
 
@@ -10,13 +11,19 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fo4_mcp.ba2_pack import fo4_pack_ba2
+from fo4_mcp.ba2_pack import _naming_warning, _read_ba2_header, fo4_pack_ba2
 from fo4_mcp.config import Config
 from fo4_mcp.errors import Fo4McpError, PathForbiddenError, ToolBinaryMissingError
-from fo4_mcp.manifest import Manifest, ToolEntry
+from fo4_mcp.manifest import Manifest, ToolEntry, parse_manifest
 
 _REPO = Path(__file__).resolve().parents[2]
-_BSARCH = _REPO / "tools" / "xedit" / "BSArch64.exe"
+def _manifest_binary(slug: str, fallback: Path) -> Path:
+    """The binary tools/MANIFEST.md records for `slug` (what the server uses), else `fallback`."""
+    entry = parse_manifest(_REPO / "tools" / "MANIFEST.md").get(slug)
+    path = entry.resolved_path(_REPO) if entry else None
+    return path if path is not None and path.is_file() else fallback
+
+_BSARCH = _manifest_binary("bsarch", _REPO / "tools" / "xedit" / "BSArch64.exe")
 
 
 def _cfg(repo_root: Path) -> Config:
@@ -118,3 +125,39 @@ def test_unresolved_binary_raises(tmp_path):
     )
     with pytest.raises(ToolBinaryMissingError):
         fo4_pack_ba2(cfg, bad_mani, str(src), "staging/x.ba2")
+
+
+# ---------------- OS-17: BA2 header + naming validation (pure) ----------------
+
+def _hdr(tag=b"GNRL", version=1, count=3):
+    return b"BTDX" + struct.pack("<I", version) + tag + struct.pack("<I", count)
+
+
+def test_read_ba2_header_valid_gnrl():
+    assert _read_ba2_header(_hdr(b"GNRL", 1, 5)) == {
+        "magic_ok": True, "version": 1, "type_tag": "GNRL", "file_count": 5}
+
+
+def test_read_ba2_header_dx10():
+    h = _read_ba2_header(_hdr(b"DX10", 8, 2))
+    assert h["type_tag"] == "DX10" and h["version"] == 8
+
+
+def test_read_ba2_header_bad_magic():
+    h = _read_ba2_header(b"ZZZZ" + b"\x00" * 12)
+    assert h["magic_ok"] is False and h["version"] is None and h["type_tag"] is None
+
+
+def test_read_ba2_header_truncated():
+    assert _read_ba2_header(b"BTDX\x01\x00")["magic_ok"] is False
+
+
+def test_naming_warning_general():
+    assert _naming_warning("MyMod - Main.ba2", "general") is None
+    assert _naming_warning("probe.ba2", "general") is not None
+
+
+def test_naming_warning_textures():
+    assert _naming_warning("MyMod - Textures.ba2", "dds") is None
+    assert _naming_warning("MyMod - Textures.ba2", "textures") is None
+    assert _naming_warning("MyMod - Main.ba2", "dds") is not None

@@ -1,12 +1,23 @@
 # tools/ MANIFEST
 
+> **Bu makinenin durumu (2026-11-24 doğrulandı).** Aşağıdaki envanter tarihsel bir kurulum
+> listesidir; her girdinin `status:` satırı bu makinedeki gerçeği söyler. `tools/` altında
+> yalnız Spriggit CLI 0.40.1, Champollion 1.3.2, Caprica 0.3.0 (2026-11-24 resmi release'ten,
+> hash doğrulandı), mutagen-cli (2026-11-24 kaynaktan derlendi; OS-15 + ACTI Model/OBND writer
+> yeniden yazıldı) ve `tools/dotnet` .NET SDK 9.0.319 var. BSArch, xEdit ve texconv
+> `C:/Modding/MO2-FO4/tools/xEdit-4.1.5f/` altındaki kopyadan salt-okur çalıştırılır (BSArch
+> sha256 bu manifestteki değerle eşleşti). Diğer eksik araçlar indirilmedi.
+> Ekim araştırma notu: `REFERENCE_TOOLS.md` (tarihsel; içindeki D:/private-kernel yolları eski).
+
 Otomatik indirilen FO4 modlama araç binary'leri. `fo4-mcp` server subprocess çağrılarında bu dosyayı path source-of-truth olarak kullanır.
 
 **Last updated:** 2026-06-21 (34 MCP tools functional, 8 skills, 387 tests; W7-Data + ACTI control-script + W9 voice handoff + **W9 silent-voice baker `fo4_bake_voice_assets`** (e2e-proven) + **W10 FaceGen builder `fo4_build_facegen`** + **W12 `fo4_build_seq`** (CK -GenerateSEQ) + `ck_run` MO2-VFS launcher; **CK LIVE-PROVEN agent-runnable** — previs produced real CombinedObjects.esp+.psg+precombined NIFs via MO2-VFS, FaceGen CLI ran headless [CK merged into main install + CKPE + RTX 3080]; güncel durum → `TASKS.md`)
-**Runtime tespit:** Fallout4.exe = 1.11.221.0 (Anniversary Edition / AE)
-**Creation Kit:** CreationKit.exe = 1.11.137.0 (Steam app 1946160, ayrı install dir)
-**.NET:** 8 SDK 8.0.421 + **9 SDK 9.0.314** (`~/.dotnet`, user-local, side-by-side). Spriggit serialization tool net9.0 hedefliyor — net9 SDK ŞART (Session 5 bulgusu).
-**Vanilla Papyrus source:** `tools/papyrus-source/Base/` (Base.zip extract, `TestKevinActivationScript.psc` silindi)
+**Runtime tespit (2026-11-24):** `D:/SteamLibrary/steamapps/common/Fallout 4/Fallout4.exe` = 1.11.240.0 (AE); F4SE 0.7.9 oyun klasöründe kurulu
+**Creation Kit:** CreationKit.exe = 1.11.246.0 — oyun klasöründe (araçlar bunu kullanır) + Steam'in kayıtlı CK-only klasörü `C:/Program Files (x86)/Steam/steamapps/common/Fallout 4/`
+**.NET:** repo-yerel SDK 9.0.319 (`tools/dotnet/`); sistemde SDK 9.0.321 + runtime 8.0.34/9.0.23 (`C:/Program Files/dotnet`). `~/.dotnet`'te SDK yok. Spriggit net9 runtime ister.
+**Vanilla Papyrus source:** `tools/papyrus-source/Base/` (Base.zip extract). Yeniden açılırsa:
+`TestKevinActivationScript.psc` ilk satırı boşlukla (` Scriptname ...`) başlıyor ve Caprica 0.3.0 import'u
+"Unable to find script name" ile durduruyor → baştaki boşluğu sil (2026-11-24 bu kopyada silindi).
 
 ## Konvansiyon
 
@@ -33,10 +44,12 @@ version: 0.40.1
 source: https://github.com/Mutagen-Modding/Spriggit/releases/tag/0.40.1
 asset: SpriggitCLI.zip
 binary_path: tools/spriggit/Spriggit.CLI.exe
+status: kurulu — tools/spriggit (0.40.1); motor önbelleği tools/runtime-tmp/Spriggit
 license: GPL-3.0
 downloaded: 2026-05-10
 extracted: 2026-05-10
-sha256: 03258E50600CB9BD4DBE2FCA49966D07070A6C8069648D74D4235DC7F332B264
+sha256_asset: 03258E50600CB9BD4DBE2FCA49966D07070A6C8069648D74D4235DC7F332B264
+sha256: 01E71FC882061F7387A5DC25022940A9A79892B81292C6B47F4DA2437649DCA5   # Spriggit.CLI.exe (2026-11-24 ölçüldü)
 size_mb: 55.8
 exe_size_mb: 158.4
 notes: |
@@ -63,6 +76,7 @@ version: 0.35.5
 source: https://github.com/Mutagen-Modding/Synthesis/releases/tag/0.35.5
 asset: Synthesis.zip
 binary_path: tools/synthesis/Synthesis.exe
+status: kurulu değil
 license: GPL-3.0
 downloaded: 2026-05-10
 extracted: 2026-05-10
@@ -89,6 +103,7 @@ version: 0.53.1
 source: https://github.com/Mutagen-Modding/Mutagen/releases/tag/0.53.1
 asset: NOT DOWNLOADED (sadece NuGet paketleri var, executable yok)
 binary_path: N/A (Synthesis runner üzerinden tüketilir)
+status: NuGet paketi (mutagen-cli derlemesinde ~/.nuget/packages'ten)
 license: GPL-3.0
 downloaded: N/A
 sha256: N/A
@@ -111,6 +126,7 @@ version: 11.00.51106.1 (VS2012 Update 4)
 source: https://download.microsoft.com/download/1/6/B/16B06F60-3B20-4FF2-B699-5E9B7962F9AE/VSU_4/vcredist_x86.exe
 asset: vcredist_x86.exe (sha256 B924AD8062EAF4E70437C8BE50FA612162795FF0839479546CE907FFA8D6E386)
 binary_path: tools/vc110-x86/ (MSVCP110.dll + MSVCR110.dll; no executable)
+status: kurulu değil
 license: Microsoft redistributable (install/redistribute under MS terms; NOT committed)
 downloaded: 2026-06-05
 sha256: |
@@ -137,6 +153,7 @@ version: Temurin 21.0.11+10 (LTS)
 source: https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jdk/hotspot/normal/eclipse
 asset: temurin21.zip (Adoptium, no installer, no admin)
 binary_path: tools/jdk/jdk-21.0.11+10/bin/ (java.exe, javac.exe, jar.exe)
+status: kurulu değil (tools/jdk yok); sistemde JDK 21 var: C:/Program Files/Microsoft/jdk-21.0.10.7-hotspot
 license: GPLv2+CE (OpenJDK) — runtime/toolchain only, not redistributed
 downloaded: 2026-06-05
 sha256: N/A (large zip; provenance = official Adoptium over verified TLS)
@@ -155,6 +172,7 @@ version: 1.0 (built against ReSaver 6.0.643)
 source: custom (tools/resaver-shim/src/fo4mcp/CleanShim.java)
 asset: built via javac -cp ReSaver.jar+lib; jar via jdk jar tool
 binary_path: tools/resaver-shim/CleanShim.jar
+status: derlenmedi (CleanShim.jar yok; ReSaver binary'leri yok) — kaynak tools/resaver-shim/src
 license: Apache-2.0 (links ReSaver, Apache-2.0 — redistribution-safe, no GPL)
 downloaded: 2026-06-05 (built)
 sha256: 872A12674483857E2EFD291294219CBC151A85E6C8A6D8F7D8AB30D53B6ED8E1
@@ -180,10 +198,11 @@ version: 0.53.1
 source: custom (tools/mutagen-cli/src/ — Mutagen.Bethesda.Fallout4 0.53.1 NuGet wrap)
 asset: built from source via dotnet publish (net9.0, framework-dependent, win-x64)
 binary_path: tools/mutagen-cli/mutagen-cli.exe
+status: kurulu — 2026-11-24 derlendi (HEAD kaynağı + yeniden yazılan OS-15 ve ACTI Model/OBND writer), hash'ler aşağıda
 license: GPL-3.0
-downloaded: 2026-06-05 (built; rebuilt 2026-06-06 with `create` subcommand + Faz 1.1 NPC fields + Faz 1.2 rich ARMO fields + Faz 2 Quest skeleton + Faz 2.1a quest dialogue + Faz 2.1b INFO conditions + Faz 2.1c quest aliases + Faz 2.1d Papyrus VMAD binding + Faz 2.1e SCEN scenes + Faz 2.1f quest stage fragments + Faz 2.1g quest alias fragments + Faz 2.2a QUST stage QSDT/RunOnStart fix + Faz 3/W1 condition run-on slots + Faz 3/W1.5 glue records GLOB/MESG/KYWD/FLST + Faz 3/W3.5 Faction FACT + Faz 3/W3a UseTemplateActors RE-probe gate + Faz 3/W3b NPC full-field [voice/combatStyle/defaultOutfit/attackRace/skin + AI enums + keywords/inventory/perks] + Faz 3/W3c NPC template-chain [defaultTemplate + useTemplateActors bitfield] + Faz 3/W3d+W3e leveled lists [LeveledNpc/LeveledItem: entries{reference,level,count} + calc flags] + Faz 3/W3f lint-npc verb [streams NPC template/FaceGen flags for fo4_lint_npc_template] + Faz 3/W2 quest objective QSTA targets [objective flags + targets{aliasId, flags, keyword, conditions}] + Faz 3/A-in-game interior navmesh IN-GAME VALIDATED [AddNavmesh now also authors the flattened cover-grid `[triCount:u32][indices]` + GridMaxDistance + a NAVI override of 000FF1:Fallout4.esm; an NPC pathfinds on it, adversarial-proven 2026-06-21 → interior navmesh reclassified CK-gated → Mutagen-authorable] + navmesh-dump/navi-dump RE ground-truth verbs + Faz 3/W6.7 quest location-alias + event-fill [alias type=location → QuestLocationAlias{specificLocation/referenceAliasLocation/externalAliasLocation}, fromEvent → FindMatchingRefFromEvent on ref+location aliases, externalAliasQuest/externalAliasId → External link; collection alias BLOCKED — Mutagen v0.53.1 can't round-trip multi-member QuestCollectionAlias, writer rejects] + Faz 3/W12 cell-navmesh-list verb [enumerates every cell — interior block hierarchy + worldspace sub-cells — with per-cell {interior, worldspaceParent, navmeshCount, hasNavi} for fo4_navmesh_handoff] + Faz 3/W7-Data package location data-input [`dataLocation` → PackageDataLocation; slot index resolved by NAME against the live template via --masters-dir] + package-dump verb [PACK Data input map ground-truth] + Faz 3/W9 voice-handoff verb [enumerates every DIAL→INFO→line with subtitle + speaker + resolved voice type + canonical .fuz path for fo4_voice_handoff] + W12-RE exterior-navmesh verbs [navmesh-dump --exterior/--record dumps worldspace NAVM geometry + cross-cell edge-links; exterior-navmesh-spike round-trips a NEW isolated WRLD + exterior cell + WorldspaceNavmeshParent NAVM + worldspace-parent 000FF1 NAVI override — disk-proves isolated exterior navmesh is Mutagen-authorable] + Coupon-MVP [Book/Note record type {name→title, text→BookText, value/weight/keywords, Teaches=BookTeachesNothing} + LeveledItemOverride record type {DeepCopy a master LVLI by FormKey, additive entry-add, clearExisting opt-in — loot injection into vanilla leveled lists} + lvli-find verb {reverse-lookup which LVLIs reference a target FormKey} + FIX: removed InvariantGlobalization so 1252 chars ¢—™© no longer corrupt to U+FFFD in authored strings] + Coupon-Visual [Book Model+MaterialSwap {book MODL = world-model nif path + Model.MaterialSwap = MSWP FormLink — the swap rides on the Model, not the Book} + MaterialSwap (MSWP) record type {substitutions[]{original→replacement} .bgsm retexture map} + read-back proof for both {book modelFile/materialSwap, MSWP substitutionCount/pairs}; drives Pre-War Coupons world-model art via the Grognak-comic recipe — DN101Note.nif + per-coupon MSWP → coupon .bgsm → coupon .dds] + MISC record type {pickupable clutter — name/value[Int32]/weight/keywords/Model+MaterialSwap; money/caps analog for a coupon as collectible item, not a readable Book} + MISC ObjectBounds (OBND) {non-zero [x1,y1,z1,x2,y2,z2] — FO4 frames the inventory preview/Inspect camera from OBND; zero box = blank preview} + MISC PreviewTransform (PTRN) {FormLink to a TRNS — the Pip-Boy/Inspect 3D preview is framed by a Transform SEPARATE from the world Model; missing PTRN = a flat item default-frames edge-on → blank preview; e.g. OverdueBook's 1CF028}; read-back proof for objectBounds/objectBoundsZero/previewTransform)
-sha256(mutagen-cli.exe — static apphost launcher, UNCHANGED across managed-code rebuilds): 81FCBD615DC3ACD2B7D4DDABC734961550BB50FBD0EA59342DF3E5E192A3CC81
-sha256(mutagen-cli.dll — the managed assembly that actually carries the code; THIS changes per build): 4B9ABE4852A910A799C8A4519C3AFCA1D11D01A0A38044A456A8C7B5BD051F12
+downloaded: 2026-06-05 (built; rebuilt 2026-11-24 from HEAD be784e1 source with tools/dotnet SDK 9.0.319, then again with the rewritten OS-15 NOTE/TERM/SMEN/SMBN + ACTI Model/OBND writer; rebuilt 2026-06-06 with `create` subcommand + Faz 1.1 NPC fields + Faz 1.2 rich ARMO fields + Faz 2 Quest skeleton + Faz 2.1a quest dialogue + Faz 2.1b INFO conditions + Faz 2.1c quest aliases + Faz 2.1d Papyrus VMAD binding + Faz 2.1e SCEN scenes + Faz 2.1f quest stage fragments + Faz 2.1g quest alias fragments + Faz 2.2a QUST stage QSDT/RunOnStart fix + Faz 3/W1 condition run-on slots + Faz 3/W1.5 glue records GLOB/MESG/KYWD/FLST + Faz 3/W3.5 Faction FACT + Faz 3/W3a UseTemplateActors RE-probe gate + Faz 3/W3b NPC full-field [voice/combatStyle/defaultOutfit/attackRace/skin + AI enums + keywords/inventory/perks] + Faz 3/W3c NPC template-chain [defaultTemplate + useTemplateActors bitfield] + Faz 3/W3d+W3e leveled lists [LeveledNpc/LeveledItem: entries{reference,level,count} + calc flags] + Faz 3/W3f lint-npc verb [streams NPC template/FaceGen flags for fo4_lint_npc_template] + Faz 3/W2 quest objective QSTA targets [objective flags + targets{aliasId, flags, keyword, conditions}] + Faz 3/A-in-game interior navmesh IN-GAME VALIDATED [AddNavmesh now also authors the flattened cover-grid `[triCount:u32][indices]` + GridMaxDistance + a NAVI override of 000FF1:Fallout4.esm; an NPC pathfinds on it, adversarial-proven 2026-06-21 → interior navmesh reclassified CK-gated → Mutagen-authorable] + navmesh-dump/navi-dump RE ground-truth verbs + Faz 3/W6.7 quest location-alias + event-fill [alias type=location → QuestLocationAlias{specificLocation/referenceAliasLocation/externalAliasLocation}, fromEvent → FindMatchingRefFromEvent on ref+location aliases, externalAliasQuest/externalAliasId → External link; collection alias BLOCKED — Mutagen v0.53.1 can't round-trip multi-member QuestCollectionAlias, writer rejects] + Faz 3/W12 cell-navmesh-list verb [enumerates every cell — interior block hierarchy + worldspace sub-cells — with per-cell {interior, worldspaceParent, navmeshCount, hasNavi} for fo4_navmesh_handoff] + Faz 3/W7-Data package location data-input [`dataLocation` → PackageDataLocation; slot index resolved by NAME against the live template via --masters-dir] + package-dump verb [PACK Data input map ground-truth] + Faz 3/W9 voice-handoff verb [enumerates every DIAL→INFO→line with subtitle + speaker + resolved voice type + canonical .fuz path for fo4_voice_handoff] + W12-RE exterior-navmesh verbs [navmesh-dump --exterior/--record dumps worldspace NAVM geometry + cross-cell edge-links; exterior-navmesh-spike round-trips a NEW isolated WRLD + exterior cell + WorldspaceNavmeshParent NAVM + worldspace-parent 000FF1 NAVI override — disk-proves isolated exterior navmesh is Mutagen-authorable] + Coupon-MVP [Book/Note record type {name→title, text→BookText, value/weight/keywords, Teaches=BookTeachesNothing} + LeveledItemOverride record type {DeepCopy a master LVLI by FormKey, additive entry-add, clearExisting opt-in — loot injection into vanilla leveled lists} + lvli-find verb {reverse-lookup which LVLIs reference a target FormKey} + FIX: removed InvariantGlobalization so 1252 chars ¢—™© no longer corrupt to U+FFFD in authored strings] + Coupon-Visual [Book Model+MaterialSwap {book MODL = world-model nif path + Model.MaterialSwap = MSWP FormLink — the swap rides on the Model, not the Book} + MaterialSwap (MSWP) record type {substitutions[]{original→replacement} .bgsm retexture map} + read-back proof for both {book modelFile/materialSwap, MSWP substitutionCount/pairs}; drives Pre-War Coupons world-model art via the Grognak-comic recipe — DN101Note.nif + per-coupon MSWP → coupon .bgsm → coupon .dds] + MISC record type {pickupable clutter — name/value[Int32]/weight/keywords/Model+MaterialSwap; money/caps analog for a coupon as collectible item, not a readable Book} + MISC ObjectBounds (OBND) {non-zero [x1,y1,z1,x2,y2,z2] — FO4 frames the inventory preview/Inspect camera from OBND; zero box = blank preview} + MISC PreviewTransform (PTRN) {FormLink to a TRNS — the Pip-Boy/Inspect 3D preview is framed by a Transform SEPARATE from the world Model; missing PTRN = a flat item default-frames edge-on → blank preview; e.g. OverdueBook's 1CF028}; read-back proof for objectBounds/objectBoundsZero/previewTransform + Open-structures build-now 2026-06-24 [WEAP weapon {DNAM stats + ammo/keywords/attach-slots/Model+MSWP} + world bases CONT/DOOR/STAT/LIGH/ALCH/INGR {Name/Model+MSWP/Keywords/Flags/Value/Weight; ALCH+INGR effects[]{MGEF, magnitude, area, duration}} + COBJ constructibleobject {createdObject + workbenchKeyword + components/categories/conditions} + OTFT outfit {worn-item list} + NPC actorFlags {Essential/Protected/... bitfield} + MESG menuButtons + FACT Ranks{gendered title}+VendorValues + LVLN/LVLI chanceNone {0-100 loot-tune} + INFO TIF VMAD fragment {per-INFO fragment→VirtualMachineAdapter + FormKey pin} + dialogue-dump verb + RenderParam {GetParameterTypes-bucketed param render — fixes alias-slot rendering as Null}])
+sha256: 40E8165EFAB62BB26066DD24062BF9A46F1FB50D5B2426A79249A3AF15AAB665
+managed_dll_sha256: 98B9F16F41392967CF093808D3C2DF84392ADCE1A0338E9AC8369568AA203E81
 notes: |
   Three subcommands, one exe:
   (1) record-query backend for fo4_inspect_record (V2-backlog #2).
@@ -316,10 +335,12 @@ version: v0.3.0
 source: https://github.com/Orvid/Caprica/releases/tag/v0.3.0
 asset: Caprica.v0.3.0.7z
 binary_path: tools/caprica/Caprica.exe
+status: kurulu — tools/caprica (2026-11-24 resmi GitHub release'ten indirildi, arşiv hash'i eşleşti)
 license: MIT
-downloaded: 2026-05-10
-extracted: 2026-05-10
-sha256: 0037E54CF3A1021E976278D9A637E8AE541AAF9EBEB8D274B6C2CFE32F4EE559
+downloaded: 2026-05-10 (yeniden: 2026-11-24)
+extracted: 2026-05-10 (yeniden: 2026-11-24)
+sha256_asset: 0037E54CF3A1021E976278D9A637E8AE541AAF9EBEB8D274B6C2CFE32F4EE559
+sha256: 389FEF19A803C36342FA7F733C96B6E27EF10FCD0B171AF10427E29CBE153EC6
 size_mb: 0.4
 exe_size_mb: 1.1
 notes: |
@@ -348,10 +369,12 @@ version: v1.3.2
 source: https://github.com/Orvid/Champollion/releases/tag/v1.3.2
 asset: Champollion.v1.3.2.zip
 binary_path: tools/champollion/Champollion.exe
+status: kurulu — tools/champollion (1.3.2)
 license: LGPL-3.0
 downloaded: 2026-05-10
 extracted: 2026-05-10
-sha256: EA53054276AC8006CCD3B323286BFBC6E34A454FA419D08DA9BD440CBD31B383
+sha256_asset: EA53054276AC8006CCD3B323286BFBC6E34A454FA419D08DA9BD440CBD31B383
+sha256: 450D9C74DADE66331D573CFAD881EF3E55384B5478E019AF6D90A82378D1A1EC   # Champollion.exe (2026-11-24 ölçüldü)
 size_mb: 0.6
 exe_size_mb: 1.3
 notes: |
@@ -367,7 +390,8 @@ name: xEdit (FO4Edit)
 version: xedit-4.1.5f
 source: https://github.com/TES5Edit/TES5Edit/releases/tag/xedit-4.1.5f
 asset: xEdit.4.1.5f.7z
-binary_path: tools/xedit/xFOEdit64.exe
+binary_path: C:/Modding/MO2-FO4/tools/xEdit-4.1.5f/xFOEdit64.exe
+status: tools/ altında yok; MO2 kopyası C:/Modding/MO2-FO4/tools/xEdit-4.1.5f/ (aynı sürüm 4.1.5f)
 binary_path_alts: |
   tools/xedit/xFOEdit.exe         (FO4 32-bit)
   tools/xedit/BSArch64.exe        (BA2 pack/unpack 64-bit, BONUS — manuel listeden cikti)
@@ -377,7 +401,8 @@ binary_path_alts: |
 license: MPL-2.0
 downloaded: 2026-05-10
 extracted: 2026-05-10
-sha256: 54C014DA621F83F06A64FD92DDB8E32ED3082D1C65F543DC1C4E432130DCED08
+sha256_asset: 54C014DA621F83F06A64FD92DDB8E32ED3082D1C65F543DC1C4E432130DCED08
+sha256: 5A27B76DC4F6634AC4C3B290434B9BCA0B5D15BB57271F94B81C37DAE85A94AF   # xFOEdit64.exe (MO2 kopyası, 2026-11-24 ölçüldü)
 size_mb: 29.9
 notes: |
   Mutagen alternatifi olarak ESP inspect için ground-truth referans.
@@ -394,7 +419,8 @@ name: BSArch
 version: 0.9c
 source: xEdit (TES5Edit/github) — bundled
 asset: BSArch64.exe (xEdit distribution)
-binary_path: tools/xedit/BSArch64.exe
+binary_path: C:/Modding/MO2-FO4/tools/xEdit-4.1.5f/BSArch64.exe
+status: tools/ altında yok; MO2 kopyası C:/Modding/MO2-FO4/tools/xEdit-4.1.5f/BSArch64.exe — sha256 bu girdiyle eşleşti
 license: MPL-2.0
 downloaded: 2026-05-10
 extracted: 2026-05-10
@@ -412,6 +438,50 @@ notes: |
   (ESS/Papyrus) shim'le sürüyoruz. Bkz aşağıdaki jdk + resaver-shim girdileri.
 ```
 
+## texconv (DirectXTex — xEdit bundled copy)
+
+```yaml
+name: texconv
+version: DirectXTex texconv (xEdit 4.1.5f paketindeki kopya)
+source: https://github.com/microsoft/DirectXTex (xEdit 4.1.5f "Edit Scripts" içinde dağıtılır)
+asset: Texconvx64.exe (xEdit distribution)
+binary_path: C:/Modding/MO2-FO4/tools/xEdit-4.1.5f/Edit Scripts/Texconvx64.exe
+status: tools/ altında yok; MO2 xEdit kopyası salt-okur kullanılır (32-bit Texconv.exe de aynı klasörde)
+license: MIT
+sha256: 807ADA209BFB035DFE8487FAF62CE4B90536D986F91434027E8153BFB51F4E98
+notes: |
+  fo4_encode_texture (texture_ops.py) bu slug'ı kullanır. Argv:
+  -nologo -y -f <FMT> [-srgb] -m <mips> [-w W -h H] -o <dir> <in>. Çıktı staging/'e yazılır;
+  MO2 klasörüne yazılmaz.
+```
+
+## nifsharp-cli (NiflySharp geometry writer — custom, GPL-isolated)
+
+```yaml
+name: nifsharp-cli
+version: NiflySharp 1.3.0 (2.x net10-only → pinned)
+source: custom (tools/nifsharp-cli/src/ — NiflySharp GPL-3.0 wrap; docs/faz-c-geometry-writer-design.md)
+asset: built from source via dotnet publish (net9.0, framework-dependent, win-x64)
+binary_path: tools/nifsharp-cli/nifsharp-cli.exe
+status: kurulu — 2026-11-24 yeniden yazıldı ve derlendi (özgün kaynak kayıptı; src artık gitignore izin listesinde)
+license: GPL-3.0 (NiflySharp) — subprocess-only
+downloaded: 2026-11-24 (NiflySharp 1.3.0 nuget.org; tools/dotnet SDK 9.0.319)
+sha256: 5EF5AE1C7CD6C855AB81D080F3800616D78AEA435AD63A48C5E3E0714E096047
+managed_dll_sha256: BAECFCDFDCFF63C10B868485D64249CCD0FF3EA7DC70BDF14232D33576AE8F6C
+notes: |
+  One verb: build-trishape --in <template.nif> --mesh <mesh.json> --out <out.nif>
+  [--shape <index|name>] [--flip-bitangent]. Template-edit ONE plain BSTriShape (block type checked
+  via GetBlockName — skinned/sub-indexed/dynamic rejected); normals derived if absent, tangent space
+  via CalcTangentsForShape (or bitangent = normal x tangent when tangents are given), bounds updated;
+  every other block left as loaded (Money_Prewar bhkPhysicsSystem 1572 B survives). stdout = one JSON
+  {out, shape, shapeIndex, numVerts, numTris, vertexFlags, boundsCenter, boundsRadius,
+  tangentsCalculated, flipBitangent}; exit 0 ok / 2 error. fo4_nif_build (geometry_ops.py) resolves it
+  via manifest.get("nifsharp-cli"). Rebuild (from tools/nifsharp-cli, DOTNET_CLI_HOME=tools/dotnet-home):
+  ../dotnet/dotnet.exe publish src/NifSharp.Build.csproj -c Release -r win-x64 --self-contained false -o .
+```
+
+---
+
 ## xLODGen (terrain/object LOD — xEdit fork)
 
 ```yaml
@@ -420,6 +490,7 @@ version: beta 132 (sheson)
 source: https://stepmodifications.org/forum/topic/13451-xlodgen-terrain-lod-beta-for-fo3-fnv-tes5-sse-enderal-fo4-tes4/
 asset: xLODGen.132.7z
 binary_path: tools/xlodgen/xLODGen/xLODGenx64.exe
+status: kurulu değil
 binary_path_alts: |
   tools/xlodgen/xLODGen/xLODGen.exe                 (32-bit fallback; readme: always use x64)
   tools/xlodgen/xLODGen/Edit Scripts/LODGenx64.exe  (object/tree LOD mesh assembler)
@@ -444,6 +515,7 @@ version: 9.0.0
 source: https://github.com/evildarkarchon/CLASSIC-Fallout4/releases/tag/9.0.0
 asset: CLASSIC-9.0.0.7z
 binary_path: tools/classic/CLASSIC.exe
+status: kurulu değil
 license: unknown (LICENSE dosyası repo'da yok — Karar 7 license strategy gerekli)
 downloaded: 2026-05-10
 extracted: 2026-05-10
@@ -467,6 +539,7 @@ version: 0.29.1
 source: https://github.com/loot/loot/releases/tag/0.29.1
 asset: loot_0.29.1-win64.7z
 binary_path: tools/loot/loot_0.29.1-0-g77f3ba9_0.29.1/LOOT.exe
+status: kurulu değil; MO2'nin yerleşik lootcli'si var: C:/Modding/MO2-FO4/loot/lootcli.exe
 license: GPL-3.0
 downloaded: 2026-05-10
 extracted: 2026-05-10
@@ -489,6 +562,7 @@ version: v2.0.dev11-20251230
 source: https://github.com/fo76utils/nifskope/releases/tag/v2.0.dev11-20251230
 asset: NifSkope_2_0_2025-12-30-win64qt6_clang.7z
 binary_path: tools/nifskope/NifSkope/NifSkope.exe
+status: kurulu değil
 binary_path_alts: |
   tools/nifskope/NifSkope/NifSkope_noavx.exe   # AVX yok CPU'lar
   tools/nifskope/NifSkope/NifSkope_noavx2.exe  # AVX2 yok CPU'lar
@@ -514,6 +588,7 @@ version: v314
 source: https://github.com/wrye-bash/wrye-bash/releases/tag/v314
 asset: Wrye.Bash.314.-.Standalone.Executable.7z
 binary_path: tools/wrye-bash/Mopy/Wrye Bash.exe
+status: kurulu değil
 license: GPL-3.0
 downloaded: 2026-05-10
 extracted: 2026-05-10
@@ -535,6 +610,7 @@ version: master (shallow clone @ 2026-05-10)
 source: https://github.com/Ryan-rsm-McKenzie/CommonLibF4
 asset: git clone --depth 1
 binary_path: N/A (header library — CMake target, vcpkg dep)
+status: bu makinede klon yok
 license: MIT
 downloaded: 2026-05-10
 sha256: N/A (source tree)
@@ -554,6 +630,7 @@ version: main (shallow clone @ 2026-05-10)
 source: https://github.com/libxse/commonlibf4-template
 asset: git clone --depth 1
 binary_path: N/A (template scaffold — xmake build)
+status: bu makinede klon yok; in-game runner'ın C++ kaynağı KAYIP, yalnız derlenmiş DLL'ler MO2 modlarında
 license: GPL-3.0
 downloaded: 2026-05-10
 sha256: N/A (source tree)
@@ -578,6 +655,7 @@ version: 0.7.7
 source: https://www.nexusmods.com/fallout4/mods/42147
 asset: Fallout 4 Script Extender-42147-0-7-7-1765908597.7z
 binary_path: tools/f4se/f4se_0_07_07/f4se_loader.exe
+status: tools/ altında yok; oyun klasöründe 0.7.9 kurulu (D:/SteamLibrary/steamapps/common/Fallout 4/f4se_loader.exe)
 binary_path_alts: |
   tools/f4se/f4se_0_07_07/f4se_*.dll          # F4SE runtime DLLs (deploy to game root)
   tools/f4se/f4se_0_07_07/Data/F4SE/Scripts/  # F4SE Papyrus script sources
@@ -600,6 +678,7 @@ version: 1.2
 source: https://www.nexusmods.com/fallout4/mods/84214
 asset: Addictol 1.2-84214-1-2-1775139822.zip
 binary_path: tools/addictol/f4se/plugins/Addictol.dll
+status: kurulu değil
 license: GPL-3.0 (subprocess-wrap zorunlu)
 downloaded: 2026-05-13
 extracted: 2026-05-13
@@ -621,6 +700,7 @@ version: 1.11.191 (All-In-One bundle, OG + NG + AE)
 source: https://www.nexusmods.com/fallout4/mods/47327
 asset: Address Library - All In One-47327-1-11-191-1765967714.zip
 binary_path: tools/address-library/F4SE/Plugins/version-1-11-191-0.bin  # AE
+status: tools/ altında yok; MO2 modu olarak kurulu (C:/Modding/MO2-FO4/mods/Address Library)
 binary_path_alts: |
   tools/address-library/F4SE/Plugins/version-1-10-163-0.bin   # OG
   tools/address-library/F4SE/Plugins/version-1-10-984-0.bin   # NG
@@ -645,6 +725,7 @@ version: 0.3
 source: https://www.nexusmods.com/fallout4/mods/33946
 asset: xSE PluginPreloader F4 0.3-33946-0-3-1718686029.zip
 binary_path: tools/xse-preloader/WinHTTP.dll
+status: kurulu değil
 binary_path_alts: |
   tools/xse-preloader/xSE PluginPreloader.xml   # config
 license: unknown (LICENSE dosyası yok)
@@ -666,6 +747,7 @@ version: 4.4.5-AE
 source: https://www.nexusmods.com/fallout4/mods/69798
 asset: RobCo Patcher - AE-69798-4-4-5-1772466014.zip
 binary_path: tools/robco-patcher/F4SE/Plugins/RobCoPatcherAE.dll
+status: kurulu değil
 license: unknown (LICENSE dosyası repo'da yok → Nexus permissions tek hukuki kaynak)
 downloaded: 2026-05-13
 extracted: 2026-05-13
@@ -686,6 +768,7 @@ version: 3.1.1-AE
 source: https://www.nexusmods.com/fallout4/mods/48365
 asset: Spell Perk Item Distributor F4  - AE-48365-3-1-1-1764509621.7z
 binary_path: tools/spid-f4/Data/F4SE/Plugins/po3_SpellPerkItemDistributorF4.dll
+status: kurulu değil
 license: unknown (LICENSE dosyası repo'da yok)
 downloaded: 2026-05-13
 extracted: 2026-05-13
@@ -705,6 +788,7 @@ version: 2.2.1-AE
 source: https://www.nexusmods.com/fallout4/mods/67528
 asset: Base Object Swapper AE-67528-2-2-1-1764509259.7z
 binary_path: tools/bos-f4/Data/F4SE/Plugins/po3_BaseObjectSwapperF4.dll
+status: kurulu değil
 license: unknown (LICENSE dosyası repo'da yok)
 downloaded: 2026-05-13
 extracted: 2026-05-13
@@ -725,6 +809,7 @@ version: 81.8 (1.11.191 Full)
 source: https://www.nexusmods.com/fallout4/mods/46403
 asset: Previsibines Repair Pack - Full (1.11.191)-46403-81-8-1777900797.7z
 binary_path: N/A (data mod — ESM + BA2 + .csg/.cdx geometry cache)
+status: kurulu değil
 binary_path_alts: |
   tools/prp/ppf.esm                    # base previs replacement master
   tools/prp/prp.esp                    # PRP patch plugin
@@ -754,6 +839,7 @@ version: 1.13.0
 source: https://www.nexusmods.com/fallout4/mods/71420
 asset: Lighthouse Papyrus Extender-71420-1-13-0-1732846550.7z
 binary_path: tools/lighthouse-papyrus/F4SE/Plugins/LighthousePapyrusExtender.dll
+status: kurulu değil
 license: doğrulanamadı (GELUXRUM author, Nexus permissions kontrol)
 downloaded: 2026-05-13
 extracted: 2026-05-13
@@ -774,6 +860,7 @@ version: 1.0f
 source: https://www.nexusmods.com/fallout4/mods/20309
 asset: HUDFramework 1.0f-20309-1-0f.zip
 binary_path: N/A (data mod — ESM + BA2 + SWF)
+status: kurulu değil
 binary_path_alts: |
   tools/hudframework/HUDFramework.esm
   tools/hudframework/HUDFramework - Main.ba2
@@ -796,6 +883,7 @@ version: 1.43
 source: https://www.nexusmods.com/fallout4/mods/21497
 asset: Mod Configuration Menu 1.43-21497-1-43-1765911344.zip
 binary_path: tools/mcm/Data/F4SE/Plugins/mcm.dll
+status: kurulu değil
 binary_path_alts: |
   tools/mcm/Data/MCM/
   tools/mcm/Data/Interface/MCM/
@@ -817,6 +905,7 @@ version: 5.7.1
 source: https://www.nexusmods.com/fallout4/mods/25
 asset: BodySlide and Outfit Studio - v5.7.1-25-5-7-1-1753637014.7z
 binary_path: tools/bodyslide/Tools/BodySlide/BodySlide x64.exe
+status: kurulu değil
 binary_path_alts: |
   tools/bodyslide/Tools/BodySlide/OutfitStudio x64.exe   # outfit conversion
   tools/bodyslide/Tools/BodySlide/BodySlide.exe          # 32-bit fallback
@@ -840,6 +929,7 @@ version: 1.9.0
 source: https://www.nexusmods.com/fallout4/mods/3635
 asset: Material Editor-3635-1-9-0-1721769261.zip
 binary_path: tools/material-editor/Material Editor.exe
+status: kurulu değil
 license: unknown
 downloaded: 2026-05-13
 extracted: 2026-05-13
@@ -859,6 +949,7 @@ version: 5.3.7
 source: https://www.nexusmods.com/skyrimspecialedition/mods/23316 (cross-game, FO4 destekli)
 asset: Cathedral Assets Optimizer 64-23316-5-3-7-1638099043.7z
 binary_path: tools/cao/Cathedral_Assets_Optimizer.exe
+status: kurulu değil
 license: doğrulanamadı (Guekka author, GitHub repo private/deleted)
 downloaded: 2026-05-13
 extracted: 2026-05-13
@@ -879,7 +970,8 @@ version: v2.5.2
 source: https://github.com/ModOrganizer2/modorganizer/releases/tag/v2.5.2
 asset_installer: Mod.Organizer-2.5.2.exe        (147.5 MB, sistem-wide installer)
 asset_portable: Mod.Organizer-2.5.2.7z          (149.7 MB, portable archive)
-binary_path: tools/mo2/portable/ModOrganizer.exe   # ← PORTABLE seçildi (Session 3)
+binary_path: C:/Modding/MO2-FO4/ModOrganizer.exe
+status: kurulu — canlı instance C:/Modding/MO2-FO4 (2.5.x portable); tools/mo2 yok
 binary_path_alt: tools/mo2/Mod.Organizer-2.5.2.exe # installer kalıyor; istenirse sistem-wide kurulur
 license: GPL-3.0 (subprocess-wrap zorunlu)
 downloaded: 2026-05-13
@@ -904,16 +996,17 @@ notes: |
 
 ```yaml
 name: Fallout 4 Creation Kit
-version: 1.11.137.0
+version: 1.11.246.0
 source: https://store.steampowered.com/app/1946160/
 app_id: 1946160
 asset: (Steam-managed, no standalone archive)
-install_dir: C:/Program Files (x86)/Steam/steamapps/common/Fallout 4 1946160/
-binary_path: C:/Program Files (x86)/Steam/steamapps/common/Fallout 4 1946160/CreationKit.exe
-binary_path_papyrus_compiler: C:/Program Files (x86)/Steam/steamapps/common/Fallout 4 1946160/Papyrus Compiler/PapyrusCompiler.exe
-binary_path_papyrus_assembler: C:/Program Files (x86)/Steam/steamapps/common/Fallout 4 1946160/Papyrus Compiler/PapyrusAssembler.exe
-binary_path_profile_analyzer:  C:/Program Files (x86)/Steam/steamapps/common/Fallout 4 1946160/Tools/PapyrusProfileAnalyzer.exe
-binary_path_stack_dump_analyzer: C:/Program Files (x86)/Steam/steamapps/common/Fallout 4 1946160/Tools/PapyrusStackDumpAnalyzer.exe
+install_dir: D:/SteamLibrary/steamapps/common/Fallout 4/   # oyunla aynı klasör; Steam'in CK-only kopyası C:/Program Files (x86)/Steam/steamapps/common/Fallout 4/
+binary_path: D:/SteamLibrary/steamapps/common/Fallout 4/CreationKit.exe
+status: kurulu — D:/SteamLibrary/steamapps/common/Fallout 4/CreationKit.exe 1.11.246 (MO2 girdisinin başlığı 'Creation Kit'; ck_run.py 'CreationKit' arar)
+binary_path_papyrus_compiler: D:/SteamLibrary/steamapps/common/Fallout 4/Papyrus Compiler/PapyrusCompiler.exe
+binary_path_papyrus_assembler: D:/SteamLibrary/steamapps/common/Fallout 4/Papyrus Compiler/PapyrusAssembler.exe
+binary_path_profile_analyzer:  D:/SteamLibrary/steamapps/common/Fallout 4/Tools/PapyrusProfileAnalyzer.exe
+binary_path_stack_dump_analyzer: D:/SteamLibrary/steamapps/common/Fallout 4/Tools/PapyrusStackDumpAnalyzer.exe
 license: Bethesda EULA (proprietary, ücretsiz kullanım — redistribute yasak)
 installed: 2026-05-14 (Steam app 1946160 üzerinden, kullanıcı tarafından)
 sha256_creationkit_exe: 222FD0AAD949E76721D85C922AE508ADA6816BA2F3E1FC11647C7239C24C2E13
@@ -921,14 +1014,12 @@ size_bytes_creationkit_exe: 69017440
 size_bytes_total_install: 212141970   # 202.3 MB
 papyrus_compiler_version: 2.8.0.4
 notes: |
-  Steam tarafından Fallout 4 ana install'ından AYRI bir dizine kurulur:
-    Fallout 4/          → oyun (1.11.191.0, runtime)
-    Fallout 4 1946160/  → Creation Kit (1.11.137.0, editor)
-  Bu önemli: CK Data/ kendi klasörünün altında — oyunun Data/'sıyla aynı
-  değil. CK'yı modlu setup'la çalıştırmak için ya Data/'yı symlink/junction'la
-  oyunun Data/'sına bağla, ya da MO2 üzerinden CK'yı launch et (önerilen).
-  CK 1.11.137 → game 1.11.191 sürüm farkı var; CK 1.10/1.11 generation
-  hâlâ AE oyununu açar (form record yapısı uyumlu, esm save yaparken çakışma yok).
+  Bu makinede (2026-11-24): oyun D:/SteamLibrary/steamapps/common/Fallout 4/ (1.11.240) ve
+  CreationKit.exe 1.11.246 aynı klasörde — fo4-mcp CK araçları CK'yi Fallout4.exe'nin yanında
+  arar. Steam app 1946160'ı ayrıca C:/Program Files (x86)/Steam/steamapps/common/Fallout 4/
+  altında CK-only olarak kayıtlı tutar (Fallout4.exe yok). MO2 (C:/Modding/MO2-FO4) CK'yi D:
+  kopyasından 'Creation Kit' başlığıyla başlatır. Aşağıdaki sha256/size değerleri 1.11.137
+  kurulumuna aittir (tarihsel).
   Papyrus Compiler dahil — Caprica (custom) ve Champollion (decompiler)
   reverse direction; bu official forward compiler. Path:
     Papyrus Compiler/PapyrusCompiler.exe  v2.8.0.4

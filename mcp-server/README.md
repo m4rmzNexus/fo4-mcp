@@ -1,6 +1,6 @@
 # fo4-mcp
 
-Fallout 4 modding tool'larını MCP üzerinden AI agent'lara (Claude Code, Codex CLI) expose eden server. `C:\Modding\` repo'sunda Phase 0 kararlarına dayanır.
+Fallout 4 modding tool'larını MCP üzerinden AI agent'lara (Claude Code, Codex CLI) expose eden server. `C:\GameDev\mods\fallout\fo4-mcp\` repo'sunda Phase 0 kararlarına dayanır.
 
 ## Mimari
 
@@ -15,8 +15,8 @@ agent (Claude Code / Codex)
         │
         ▼
    FO4 install / user data (READ-ONLY)
-   C:\Modding\staging      (write OK, generated outputs)
-   C:\Modding\fixtures     (write only with diff+approval)
+   <repo>\staging         (write OK, generated outputs)
+   <repo>\fixtures        (write only with diff+approval)
 ```
 
 **Subprocess-wrap pattern:** çoğu underlying tool GPL-3.0 lisanslı (Mutagen, Spriggit, Synthesis, Buffout/Addictol). Library-link contagion riskini elimine etmek için fo4-mcp tüm bu binary'leri **process boundary** üzerinden çağırır (asla import etmez). License: `docs/karar-7-license-strategy.md` (Karar 7 → MIT).
@@ -31,7 +31,7 @@ Tam tablo (gruplu) için kök [`README.md`](../README.md) → *Capabilities*. Ç
 
 ## Path safety
 
-Tüm write attempts `safety.check_write()` üzerinden geçer (Karar 4 tablosu). Default: read-only her yer, sadece `C:\Modding\staging\`, `research/`, ve diff-gated `fixtures/`, `staging/*.psc`, `staging/*.ini` yazılabilir. Steam install klasörüne yazma koşulsuz yasak.
+Tüm write attempts `safety.check_write()` üzerinden geçer (Karar 4 tablosu). Default: read-only her yer, sadece `staging/`, `research/`, ve diff-gated `fixtures/`, `staging/*.psc`, `staging/*.ini` yazılabilir. Steam install klasörüne yazma koşulsuz yasak.
 
 ## Geliştirme
 

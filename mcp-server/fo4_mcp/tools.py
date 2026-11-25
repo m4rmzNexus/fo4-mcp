@@ -48,19 +48,20 @@ def fo4_get_environment(cfg: Config) -> dict[str, Any]:
     because it just reads filesystem state — no underlying binary call.
     """
     fo4 = cfg.fo4_install_dir
-    runtime_version = _detect_runtime_version(fo4) if fo4 else None
-    f4se_version    = _detect_f4se_version(fo4)    if fo4 else None
+    runtime = fo4 / "Fallout4.exe" if fo4 else None
+    loader = fo4 / "f4se_loader.exe" if fo4 else None
     mo2 = cfg.mo2_instance_dir
 
     return ok({
         "fo4": {
             "install_dir":     str(fo4) if fo4 else None,
-            "runtime_version": runtime_version,
-            "found":           fo4 is not None,
+            "runtime_version": _windows_file_version(runtime),
+            "found":           bool(runtime and runtime.is_file()),
         },
         "f4se": {
-            "version": f4se_version,
-            "found":   f4se_version is not None,
+            "version": _windows_file_version(loader),
+            "found":   bool(loader and loader.is_file()),
+            "data_dir_present": bool(fo4 and (fo4 / "Data" / "F4SE").is_dir()),
         },
         "mo2": {
             "instance_dir": str(mo2) if mo2 else None,
@@ -76,23 +77,29 @@ def fo4_get_environment(cfg: Config) -> dict[str, Any]:
     })
 
 
-def _detect_runtime_version(fo4_dir: Path) -> str | None:
-    r"""Read Fallout4.exe version. Stub: returns None until implemented.
+def _windows_file_version(exe: Path | None) -> str | None:
+    """Read the numeric VS_FIXEDFILEINFO version without starting the executable."""
+    import ctypes
+    import sys
 
-    Real impl: read PE version resource via pefile or a powershell call to
-    Get-Item .\Fallout4.exe | Select VersionInfo.
-    """
-    exe = fo4_dir / "Fallout4.exe"
-    return f"present (size={exe.stat().st_size})" if exe.exists() else None
-
-
-def _detect_f4se_version(fo4_dir: Path) -> str | None:
-    """Look for f4se_loader.exe and Data/F4SE/."""
-    loader = fo4_dir / "f4se_loader.exe"
-    if not loader.exists():
+    if sys.platform != "win32" or not exe or not exe.is_file():
         return None
-    f4se_data = fo4_dir / "Data" / "F4SE"
-    return f"loader present, Data/F4SE/={'yes' if f4se_data.exists() else 'no'}"
+    version = ctypes.windll.version
+    path = str(exe.resolve())
+    size = version.GetFileVersionInfoSizeW(path, None)
+    if not size:
+        return None
+    data = ctypes.create_string_buffer(size)
+    if not version.GetFileVersionInfoW(path, 0, size, data):
+        return None
+    ptr = ctypes.c_void_p()
+    length = ctypes.c_uint()
+    if not version.VerQueryValueW(data, "\\", ctypes.byref(ptr), ctypes.byref(length)) or length.value < 16:
+        return None
+    signature, _, ms, ls = struct.unpack("<4I", ctypes.string_at(ptr, 16))
+    if signature != 0xFEEF04BD:
+        return None
+    return f"{ms >> 16}.{ms & 0xffff}.{ls >> 16}.{ls & 0xffff}"
 
 
 # ---- Tool 2: load order ------------------------------------------------------
@@ -454,7 +461,7 @@ def fo4_inspect_record(cfg: Config, manifest: Manifest, plugin: str, record_id: 
             "-p", _SPRIGGIT_PACKAGE,
             "-v", version,
         ]
-        result = run_tool(binary, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+        result = run_tool(binary, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
         if not out_dir.exists():
             raise Fo4McpError(
                 ErrorCode.SUBPROCESS_FAILED,
@@ -510,7 +517,7 @@ def _inspect_record_via_cli(
         cli,
         ["--plugin", str(plugin_path), "--record", record_id],
         timeout=cfg.subprocess_timeout,
-        env_extra=_spriggit_env(),
+        env_extra=_spriggit_env(cfg),
     )
     if result.exit_code == 2 or result.timed_out:
         raise Fo4McpError(
@@ -551,7 +558,7 @@ def _inspect_record_via_cli(
 # ---- Tool 3j: create record (authoring writer) ------------------------------
 
 # Record types the mutagen-cli `create` subcommand can author.
-_CREATE_SUPPORTED_TYPES = ("npc", "armor", "quest", "keyword", "formlist", "message", "global", "faction", "levelednpc", "leveleditem", "leveleditemoverride", "cell", "celloverride", "smqn", "activator", "location", "locationreftype", "encounterzone", "package", "book", "misc", "materialswap")
+_CREATE_SUPPORTED_TYPES = ("npc", "armor", "quest", "keyword", "formlist", "message", "global", "faction", "levelednpc", "leveleditem", "leveleditemoverride", "cell", "celloverride", "smqn", "smen", "smbn", "activator", "location", "locationreftype", "encounterzone", "package", "book", "misc", "note", "holotape", "terminal", "term", "materialswap", "outfit", "weapon", "static", "door", "light", "container", "ingestible", "ingredient", "constructibleobject", "cobj")
 
 # Papyrus VMAD script-property value types the writer maps to ScriptProperty subclasses.
 _SCRIPT_PROPERTY_TYPES = ("object", "int", "float", "bool", "string")
@@ -568,6 +575,13 @@ _BIPED_OBJECT_FLAGS = frozenset((
     "rightarmarmor", "leftlegarmor", "rightlegarmor", "headband", "eyes", "beard",
     "mouth", "neck", "ring", "scalp", "decapitation", "unnamed54", "unnamed55",
     "unnamed56", "unnamed57", "unnamed58", "shield", "pipboy", "fx",
+))
+
+# OS-01: Weapon.AnimationTypes names (case-insensitive early reject; CLI Enum.TryParse is
+# authoritative). The weapon "type" — drives the held-animation set.
+_WEAPON_ANIM_TYPES = frozenset((
+    "handtohandmelee", "onehandsword", "onehanddagger", "onehandaxe", "onehandmace",
+    "twohandsword", "twohandaxe", "bow", "staff", "gun", "grenade", "mine",
 ))
 
 
@@ -807,7 +821,7 @@ def fo4_create_record(
     variants are the next authoring surface (ahead).
 
     Args:
-        spec:              {"records": [{"type": "Npc"|"Armor"|"Quest"|"Keyword"|"FormList"|"Message"|"Global"|"Faction"|"LeveledNpc"|"LeveledItem"|"Cell",
+        spec:              {"records": [{"type": "Npc"|"Armor"|"Weapon"|"Quest"|"Keyword"|"FormList"|"Message"|"Global"|"Faction"|"LeveledNpc"|"LeveledItem"|"Cell"|"Outfit"|"Static"|"Door"|"Light"|"Container"|"Ingestible"|"Ingredient"|"ConstructibleObject",
                            "editorId": str, "name": str?,
                            # NPC-only:
                            "race": "<6hex>:<master>"?, "class": "<6hex>:<master>"?,
@@ -827,13 +841,47 @@ def fo4_create_record(
                            # NPC template-chain (W3c) — FaceGen inheritance:
                            "defaultTemplate": "<6hex>:<master>"?,  # NPC_ or LVLN template source
                            "useTemplateActors": [str]?,  # TemplateActorType flags OR'd (Traits|Stats|Factions|SpellList|AiData|AiPackages|ModelOrAnimation|BaseData|Inventory|Script|DefPackList|AttackData|Keywords)
+                           # NPC actor flags (OS-14) — Essential/Protected guard a quest-critical NPC:
+                           "flags": [str]?,  # Npc.Flag names (Essential|Protected|Invulnerable|Unique|Respawn|...)
                            # Armor-only:
                            "keywords": ["<6hex>:<master>"]?, "value": int?,
                            "weight": float?, "armorRating": int?,  # 0..65535
                            "bipedSlots": [str]?,  # BipedObjectFlag names, e.g. TorsoArmor
+                           # Weapon-only (OS-01) — DNAM stats + FormLinks + model/keywords:
+                           "value": int?, "weight": float?,
+                           "baseDamage": int?, "ammoCapacity": int?,  # 0..65535
+                           "speed": float?, "reach": float?, "minRange": float?, "maxRange": float?,  # >=0
+                           "animationType": str?,  # Gun|Bow|OneHandSword|TwoHandAxe|Grenade|Mine|...
+                           "ammo": "<6hex>:<master>"?,         # AMMO FormLink
+                           "attackSound": "<6hex>:<master>"?,  # SNDR FormLink
+                           "equipSound": "<6hex>:<master>"?,   # SNDR FormLink
+                           "attachParentSlots": ["<6hex>:<master>"]?,  # AKEY keyword FormLinks
+                           "model": str?, "materialSwap": "<6hex>:<master>"?,
+                           "objectBounds": [x1,y1,z1,x2,y2,z2]?,
+                           # Outfit (OS-14): items = worn-piece FormLinks (ARMO/LVLI/NPC_).
+                           "items": ["<6hex>:<master>"]?,
+                           # Static/Door/Light/Container/Ingestible/Ingredient (OS-02):
+                           # share model/materialSwap/keywords/flags; LIGH/ALCH add value/weight;
+                           # LIGH adds radius (uint); CONT adds inventory; ALCH/INGR add effects.
+                           "radius": int?,  # LIGH only
+                           "inventory": [{"item": "<6hex>:<master>", "count": int}]?,  # CONT only
+                           "effects": [{"baseEffect": "<6hex>:<master>",  # MGEF (required)
+                             "magnitude": float?, "area": int?, "duration": int?}]?,  # ALCH/INGR only
+                           # ConstructibleObject / COBJ (OS-08) — a crafting recipe:
+                           "createdObject": "<6hex>:<master>",       # recipe output (required)
+                           "workbenchKeyword": "<6hex>:<master>",    # bench type (required)
+                           "createdObjectCount": int?,               # default 1
+                           "menuArtObject": "<6hex>:<master>"?,
+                           "components": [{"component": "<6hex>:<master>", "count": int}]?,
+                           "categories": ["<6hex>:<master>"]?,       # workshop-menu filter KYWDs
+                           "conditions": [{...like INFO conditions...}]?,  # recipe gates
                            # Keyword: editorId (+ name) only — a bare KYWD.
                            # Message-only:
                            "text": str?,  # MESG body (Description); title|name -> Name
+                           # OS-11: message-box flags + menu buttons (choice dialogs):
+                           "flags": [str]?,  # Message.Flag (MessageBox|DelayInitialDisplay)
+                           "menuButtons": [{"text": str,  # the choice text (required)
+                             "conditions": [{...like INFO conditions...}]?}]?,
                            # FormList-only:
                            "items": ["<6hex>:<master>"]?,  # FLST entries (any record)
                            # Global-only:
@@ -842,10 +890,16 @@ def fo4_create_record(
                            # Faction-only (+ "flags": [str]? faction flags, e.g. TrackCrime):
                            "interfactionRelations": [{"faction": "<6hex>:<master>",
                              "reaction": "Neutral"|"Enemy"|"Ally"|"Friend"}]?,
+                           # OS-11: ranks (gendered titles) + vendor/merchant data:
+                           "ranks": [{"number": int?, "title": str?,  # title fills both genders
+                             "titleFemale": str?, "insignia": str?}]?,  # unless titleFemale overrides
+                           "vendorValues": {"startHour": int?, "endHour": int?, "radius": int?,  # 0..65535
+                             "buysStolen": bool?, "buysNonStolen": bool?, "buyEverything": bool?}?,
                            # LeveledNpc / LeveledItem (W3d/W3e) — flags reuse the "flags" key:
                            "entries": [{"reference": "<6hex>:<master>",  # INpcSpawn (LVLN) | IItem (LVLI)
                              "level": int?, "count": int?}]?,  # level/count 1..32767, default 1
                            "flags": [str]?,  # LVLN: Calculate{FromAllLevelsLessThanOrEqualPlayer,ForEachItemInCount,All}; LVLI: ...,UseAll
+                           "chanceNone": int?,  # OS-11: 0..100% chance the list yields nothing
                            # Cell-only (W4) — a new INTERIOR cell + nested placed refs.
                            # name -> display cell name; block/subblock are auto-derived from the FormID.
                            "lightingTemplate": "<6hex>:<master>"?,  # LTMP — omit it and the cell renders black
@@ -884,6 +938,7 @@ def fo4_create_record(
                              "branch": str?,  # owning branch editorId (in-spec) or FormKey -> topic surfaces
                              "responses": [{"prompt": str?,  # the wheel button text (player-facing)
                                "speaker": "<6hex>:<master>"?,
+                               "formKey": "<6hex>:<master>"?,  # OS-04: pin the INFO id (stable TIF name)
                                "lines": [{"text": str?, "responseNumber": int?,
                                  "emotion": "<6hex>:<master>"?}]?,
                                "conditions": [{"function": str, "comparison": str?,
@@ -891,7 +946,11 @@ def fo4_create_record(
                                  "runOn": str?,  # RunOnType; default Subject
                                  "aliasRunOn": int?,  # runOn=QuestAlias: explicit alias id (->Unknown3)
                                  "reference": "<6hex>:<master>"?  # runOn=Reference: target ref
-                                 }]?}]?}]?,
+                                 }]?,
+                               "setParentQuestStage": {"onBegin": int?, "onEnd": int?}?,  # SNAM stage advance
+                               "fragment": {"scriptName": str,  # OS-04: TIF VMAD — line runs Papyrus
+                                 "flags": str?, "onBegin": str?, "onEnd": str?,  # >=1 of onBegin/onEnd
+                                 "properties": [{...like script properties...}]?}?}]?}]?,
                            "aliases": [{"id": int?, "name": str?, "flags": [str]?,
                              "type": "reference"|"location"?,  # default reference
                              "forcedReference": "<6hex>:<master>"?,  # [reference] fill
@@ -968,9 +1027,11 @@ def fo4_create_record(
             raise Fo4McpError(
                 ErrorCode.INVALID_ARGUMENT,
                 f"spec.records[{i}].type '{rtype}' unsupported "
-                f"(Npc, Armor, Quest, Keyword, FormList, Message, Global, Faction, "
+                f"(Npc, Armor, Weapon, Quest, Keyword, FormList, Message, Global, Faction, "
                 f"LeveledNpc, LeveledItem, LeveledItemOverride, Cell, CellOverride, Smqn, "
-                f"Activator, Location, LocationRefType, EncounterZone, Package, Book)",
+                f"Smen, Smbn, Activator, Location, LocationRefType, EncounterZone, Package, "
+                f"Book, Misc, Note/Holotape, Terminal, MaterialSwap, Outfit, Static, Door, "
+                f"Light, Container, Ingestible, Ingredient, ConstructibleObject)",
                 {"supported": list(_CREATE_SUPPORTED_TYPES)},
             )
         if not eid and rtype.lower() not in ("celloverride", "leveleditemoverride"):
@@ -1139,6 +1200,25 @@ def fo4_create_record(
                         )
                     norm_uta.append(str(fl).strip())
                 rec["useTemplateActors"] = norm_uta
+            # OS-14: actor flags (Essential/Protected/...). Author-facing key is `flags`; mapped
+            # to npcFlags to avoid the C# Quest/Faction Flags-field collision. CLI does the
+            # authoritative Npc.Flag enum parse.
+            nfl = r.get("flags")
+            if nfl is not None:
+                if not isinstance(nfl, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].flags must be a list of flag names", {}
+                    )
+                norm_nfl: list[str] = []
+                for j, fl in enumerate(nfl):
+                    if not str(fl).strip():
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].flags[{j}] must be a non-empty flag name", {}
+                        )
+                    norm_nfl.append(str(fl).strip())
+                rec["npcFlags"] = norm_nfl
         # Faz 1.2: richer ARMO. Keyword FormKeys are shape-checked here (CLI does the
         # authoritative parse + auto-adds masters); value/weight/armorRating ranges and
         # biped-slot flag names are validated here too.
@@ -1248,6 +1328,105 @@ def fo4_create_record(
                 rec["armatures"] = norm_arms
             if r.get("race") is not None:
                 rec["race"] = str(r["race"]).strip()
+        # OS-01: WEAP weapon. value/weight reuse the shared item ranges; DNAM stats are
+        # range-checked here (baseDamage/ammoCapacity UInt16; speed/reach/min/maxRange >=0);
+        # animationType is checked against _WEAPON_ANIM_TYPES. The CLI does the authoritative
+        # FormKey parse (ammo/attackSound/equipSound) + Enum.TryParse + master auto-add.
+        elif rtype.lower() == "weapon":
+            if r.get("value") is not None:
+                try:
+                    wval = int(r["value"])
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].value must be an integer", {})
+                if wval < 0:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].value must be >= 0", {"value": wval})
+                rec["value"] = wval
+            if r.get("weight") is not None:
+                try:
+                    wwt = float(r["weight"])
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].weight must be a number", {})
+                if wwt < 0:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].weight must be >= 0", {"weight": wwt})
+                rec["weight"] = wwt
+            for fld in ("baseDamage", "ammoCapacity"):
+                if r.get(fld) is not None:
+                    try:
+                        v = int(r[fld])
+                    except (TypeError, ValueError):
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].{fld} must be an integer", {})
+                    if not 0 <= v <= 65535:
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].{fld} out of range (0..65535)", {"value": v})
+                    rec[fld] = v
+            for fld in ("speed", "reach", "minRange", "maxRange"):
+                if r.get(fld) is not None:
+                    try:
+                        v = float(r[fld])
+                    except (TypeError, ValueError):
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].{fld} must be a number", {})
+                    if v < 0:
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].{fld} must be >= 0", {"value": v})
+                    rec[fld] = v
+            anim = r.get("animationType")
+            if anim is not None:
+                anim_s = str(anim).strip()
+                if anim_s.lower() not in _WEAPON_ANIM_TYPES:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].animationType '{anim_s}' is not a Weapon.AnimationType",
+                        {"animationType": anim_s})
+                rec["animationType"] = anim_s
+            for fld in ("ammo", "attackSound", "equipSound", "model", "materialSwap"):
+                if r.get(fld) is not None:
+                    rec[fld] = str(r[fld]).strip()
+            for lst in ("keywords", "attachParentSlots"):
+                v = r.get(lst)
+                if v is not None:
+                    if not isinstance(v, list):
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].{lst} must be a list", {})
+                    norm_l: list[str] = []
+                    for j, kw in enumerate(v):
+                        if not str(kw).strip():
+                            raise Fo4McpError(
+                                ErrorCode.INVALID_ARGUMENT,
+                                f"spec.records[{i}].{lst}[{j}] must be a non-empty FormKey", {})
+                        norm_l.append(str(kw).strip())
+                    rec[lst] = norm_l
+            ob = r.get("objectBounds")
+            if ob is not None:
+                if not isinstance(ob, list) or len(ob) != 6:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be [x1,y1,z1,x2,y2,z2]", {})
+                try:
+                    obi = [int(v) for v in ob]
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be 6 integers", {})
+                if any(v < -32768 or v > 32767 for v in obi):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds values must be Int16 (-32768..32767)", {})
+                rec["objectBounds"] = obi
         # Faz 2: quest skeleton (Name handled above). The CLI validates the enum
         # names (questType/flags); stage/objective index ranges are checked here.
         elif rtype.lower() == "quest":
@@ -1463,6 +1642,48 @@ def fo4_create_record(
                                         sentry[skey] = sv
                                 if sentry:
                                     rentry["setParentQuestStage"] = sentry
+                            # OS-04: pin the INFO FormKey so the TIF_<eid>_<8hex> fragment-script
+                            # name stays stable across re-authoring (the CLI validates it is in the
+                            # mod's own slot).
+                            if resp.get("formKey") is not None:
+                                rentry["formKey"] = str(resp["formKey"]).strip()
+                            # OS-04: per-INFO TIF VMAD fragment — the line runs Papyrus
+                            # (Fragment_Begin/Fragment_End). {scriptName, onBegin?, onEnd?, flags?,
+                            # properties?}; at least one of onBegin/onEnd is required. Metadata only;
+                            # the .pex is compiled separately via fo4_papyrus_build (like quest
+                            # fragments). The CLI is authoritative on the VMAD model.
+                            ifrag = resp.get("fragment")
+                            if ifrag is not None:
+                                ifloc = f"{rloc}.fragment"
+                                if not isinstance(ifrag, dict):
+                                    raise Fo4McpError(
+                                        ErrorCode.INVALID_ARGUMENT,
+                                        f"{ifloc} must be an object", {}
+                                    )
+                                ifscript = str(ifrag.get("scriptName", "")).strip()
+                                if not ifscript:
+                                    raise Fo4McpError(
+                                        ErrorCode.INVALID_ARGUMENT,
+                                        f"{ifloc} needs a 'scriptName'", {}
+                                    )
+                                if ifrag.get("onBegin") is None and ifrag.get("onEnd") is None:
+                                    raise Fo4McpError(
+                                        ErrorCode.INVALID_ARGUMENT,
+                                        f"{ifloc} needs at least one of 'onBegin'/'onEnd'", {}
+                                    )
+                                ifentry: dict[str, Any] = {"scriptName": ifscript}
+                                if ifrag.get("flags") is not None:
+                                    ifentry["flags"] = str(ifrag["flags"]).strip()
+                                if ifrag.get("onBegin") is not None:
+                                    ifentry["onBegin"] = str(ifrag["onBegin"]).strip()
+                                if ifrag.get("onEnd") is not None:
+                                    ifentry["onEnd"] = str(ifrag["onEnd"]).strip()
+                                ifprops = ifrag.get("properties")
+                                if ifprops is not None:
+                                    ifentry["properties"] = _norm_script_properties(
+                                        ifprops, f"{ifloc}.properties"
+                                    )
+                                rentry["fragment"] = ifentry
                             norm_resps.append(rentry)
                         topic["responses"] = norm_resps
                     norm_topics.append(topic)
@@ -1860,10 +2081,27 @@ def fo4_create_record(
         # construction (abstract-Global subclass dispatch, FormKey parse via TryKey,
         # int/short range) — Python validates shape and passes through.
         elif rtype.lower() == "keyword":
-            # Bare KYWD: editorId-only (+ shared name handled above). No keyword-
-            # specific MVP fields; the elif exists so the type is accepted and
-            # future fields (color/type) have a home.
-            pass
+            # KYWD: editorId (+ shared name). Workshop-build-menu category keywords need
+            # BOTH a CNAM color [r,g,b]/[a,r,g,b] (button is drawn from it) AND TNAM
+            # keywordType=9 (RecipeFilter) — the menu only traverses RecipeFilter keywords,
+            # so a typeless keyword loads but never renders. Plain keywords omit both.
+            color = r.get("color")
+            if color is not None:
+                if (not isinstance(color, (list, tuple))
+                        or len(color) not in (3, 4)
+                        or not all(isinstance(c, int) and 0 <= c <= 255 for c in color)):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].color must be [r,g,b] or [a,r,g,b] ints 0..255", {})
+                rec["color"] = [int(c) for c in color]
+            kwt = r.get("keywordType")
+            if kwt is not None:
+                try:
+                    rec["keywordType"] = int(kwt)
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].keywordType must be an integer (9 = RecipeFilter)", {})
         elif rtype.lower() == "formlist":
             items = r.get("items")
             if items is not None:
@@ -1889,6 +2127,33 @@ def fo4_create_record(
                 rec["text"] = str(r["text"])
             if r.get("title") is not None:
                 rec["name"] = str(r["title"])
+            # OS-11: flags (Message.Flag — MessageBox is needed for buttons to render) +
+            # menuButtons (choice dialogs; each {text required, conditions? -> _norm_conditions}).
+            flags = r.get("flags")
+            if flags is not None:
+                if not isinstance(flags, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].flags must be a list of flag names", {})
+                rec["flags"] = [str(x).strip() for x in flags]
+            btns = r.get("menuButtons")
+            if btns is not None:
+                if not isinstance(btns, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].menuButtons must be a list", {})
+                norm_btns: list[dict[str, Any]] = []
+                for j, b in enumerate(btns):
+                    if not isinstance(b, dict) or not str(b.get("text", "")).strip():
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].menuButtons[{j}] needs a 'text'", {})
+                    nb: dict[str, Any] = {"text": str(b["text"])}
+                    if b.get("conditions") is not None:
+                        nb["conditions"] = _norm_conditions(
+                            b["conditions"], f"spec.records[{i}].menuButtons[{j}].conditions")
+                    norm_btns.append(nb)
+                rec["menuButtons"] = norm_btns
         elif rtype.lower() in ("book", "misc"):
             # BOOK/note OR MISC clutter (coupon): value/weight reuse the shared item ranges;
             # keywords is a FormKey list; model = world-model nif (+ optional materialSwap).
@@ -1961,6 +2226,82 @@ def fo4_create_record(
                 pts = str(pt).strip()
                 if pts:
                     rec["previewTransform"] = pts
+        elif rtype.lower() in ("note", "holotape"):
+            # OS-15 NOTE/Holotape — name + model(+materialSwap) + value/weight + objectBounds reuse the
+            # shared item handling. The payload is the Data union selected by holotapeType:
+            #   sound -> {sound: sound-descriptor FormKey}   voice -> {scene: SCEN FormKey}
+            #   program -> {programFile: ".swf" path}        terminal -> {terminalLink: TERM FormKey}
+            # The CLI does the authoritative enum/FormKey parse and requires the matching payload.
+            if r.get("holotapeType") is not None:
+                rec["holotapeType"] = str(r["holotapeType"]).strip()
+            for fld in ("sound", "scene", "programFile", "terminalLink", "model", "materialSwap"):
+                if r.get(fld) is not None:
+                    rec[fld] = str(r[fld]).strip()
+            for fld in ("value", "weight"):
+                if r.get(fld) is not None:
+                    try:
+                        v: Any = int(r[fld]) if fld == "value" else float(r[fld])
+                    except (TypeError, ValueError):
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].{fld} must be a number", {})
+                    if v < 0:
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].{fld} must be >= 0", {fld: v})
+                    rec[fld] = v
+            ob = r.get("objectBounds")
+            if ob is not None:
+                if not isinstance(ob, list) or len(ob) != 6:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be [x1,y1,z1,x2,y2,z2]", {})
+                try:
+                    obi = [int(v) for v in ob]
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be 6 integers", {})
+                if any(v < -32768 or v > 32767 for v in obi):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds values must be Int16 (-32768..32767)", {})
+                rec["objectBounds"] = obi
+        elif rtype.lower() in ("terminal", "term"):
+            # OS-15 TERM — readable info terminal: name + headerText (banner) + text (WelcomeText,
+            # shown on connect) + bodyTexts (static body paragraphs) + model(+materialSwap) +
+            # objectBounds. The CLI builds the TerminalBodyText list; submenu navigation is deferred.
+            if r.get("headerText") is not None:
+                rec["headerText"] = str(r["headerText"])
+            if r.get("text") is not None:
+                rec["text"] = str(r["text"])
+            for fld in ("model", "materialSwap"):
+                if r.get(fld) is not None:
+                    rec[fld] = str(r[fld]).strip()
+            bt = r.get("bodyTexts")
+            if bt is not None:
+                if not isinstance(bt, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].bodyTexts must be a list of strings", {})
+                rec["bodyTexts"] = [str(x) for x in bt]
+            ob = r.get("objectBounds")
+            if ob is not None:
+                if not isinstance(ob, list) or len(ob) != 6:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be [x1,y1,z1,x2,y2,z2]", {})
+                try:
+                    obi = [int(v) for v in ob]
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be 6 integers", {})
+                if any(v < -32768 or v > 32767 for v in obi):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds values must be Int16 (-32768..32767)", {})
+                rec["objectBounds"] = obi
         elif rtype.lower() == "materialswap":
             # MSWP: a retexture map. substitutions = [{original, replacement}] .bgsm paths
             # (Data-relative, "Materials\...\x.bgsm"). The CLI does the authoritative add.
@@ -2044,6 +2385,71 @@ def fo4_create_record(
                         "reaction": str(rel["reaction"]).strip(),
                     })
                 rec["interfactionRelations"] = norm_rels
+            # OS-11: ranks (member titles — gendered; a single 'title' fills both, 'titleFemale'
+            # overrides) + vendorValues (merchant data: trade hours/radius + 3 buy/sell bools).
+            ranks = r.get("ranks")
+            if ranks is not None:
+                if not isinstance(ranks, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].ranks must be a list", {})
+                norm_ranks: list[dict[str, Any]] = []
+                for j, rk in enumerate(ranks):
+                    if not isinstance(rk, dict):
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].ranks[{j}] must be an object", {})
+                    nr: dict[str, Any] = {}
+                    if rk.get("number") is not None:
+                        try:
+                            num = int(rk["number"])
+                        except (TypeError, ValueError):
+                            raise Fo4McpError(
+                                ErrorCode.INVALID_ARGUMENT,
+                                f"spec.records[{i}].ranks[{j}].number must be an integer", {})
+                        if not 0 <= num <= 4294967295:
+                            raise Fo4McpError(
+                                ErrorCode.INVALID_ARGUMENT,
+                                f"spec.records[{i}].ranks[{j}].number out of range (0..4294967295)",
+                                {"number": num})
+                        nr["number"] = num
+                    if rk.get("title") is not None:
+                        nr["title"] = str(rk["title"])
+                    if rk.get("titleFemale") is not None:
+                        nr["titleFemale"] = str(rk["titleFemale"])
+                    if rk.get("insignia") is not None:
+                        nr["insignia"] = str(rk["insignia"]).strip()
+                    norm_ranks.append(nr)
+                rec["ranks"] = norm_ranks
+            vv = r.get("vendorValues")
+            if vv is not None:
+                if not isinstance(vv, dict):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].vendorValues must be an object", {})
+                norm_vv: dict[str, Any] = {}
+                for hf in ("startHour", "endHour", "radius"):
+                    if vv.get(hf) is not None:
+                        try:
+                            hv = int(vv[hf])
+                        except (TypeError, ValueError):
+                            raise Fo4McpError(
+                                ErrorCode.INVALID_ARGUMENT,
+                                f"spec.records[{i}].vendorValues.{hf} must be an integer", {})
+                        if not 0 <= hv <= 65535:
+                            raise Fo4McpError(
+                                ErrorCode.INVALID_ARGUMENT,
+                                f"spec.records[{i}].vendorValues.{hf} out of range (0..65535)",
+                                {"value": hv})
+                        norm_vv[hf] = hv
+                for bf in ("buysStolen", "buysNonStolen", "buyEverything"):
+                    if vv.get(bf) is not None:
+                        norm_vv[bf] = bool(vv[bf])
+                # only author a VendorValues subrecord when something was actually
+                # set — an empty/all-None dict must not turn a non-vendor faction
+                # into a degenerate all-zero vendor.
+                if norm_vv:
+                    rec["vendorValues"] = norm_vv
         # W3d/W3e: LVLN/LVLI leveled lists. flags (reuses the quest "flags" key; CLI does the
         # authoritative LeveledNpc.Flag/LeveledItem.Flag parse — note bit 4 is CalculateAll for
         # LVLN vs UseAll for LVLI) + entries [{reference FormKey, level/count int 1..32767}].
@@ -2093,6 +2499,19 @@ def fo4_create_record(
                         "reference": str(en["reference"]).strip(), "level": level, "count": count,
                     })
                 rec["entries"] = norm_entries
+            # OS-11: chanceNone (loot tuning — % chance the list yields nothing; 0-100 int).
+            if r.get("chanceNone") is not None:
+                try:
+                    cn = int(r["chanceNone"])
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].chanceNone must be an integer", {})
+                if not 0 <= cn <= 100:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].chanceNone out of range (0..100)", {"chanceNone": cn})
+                rec["chanceNone"] = cn
             # W3e-inject: LeveledItemOverride grafts the entries above onto an EXISTING (master)
             # LVLI. Needs sourcePlugin (holds the target list) + target (the LVLI FormKey). ADDITIVE
             # unless clearExisting wipes the vanilla entries. The CLI DeepCopies it as an override.
@@ -2229,10 +2648,71 @@ def fo4_create_record(
                                 f"spec.records[{i}].quests[{j}].hoursUntilReset must be a number", {})
                     norm_q.append(qe)
                 rec["quests"] = norm_q
+        elif rtype.lower() in ("smen", "smbn"):
+            # OS-15 Story Manager Event/Branch Node — parent/previousSibling FormLinks; flags reuse
+            # AStoryManagerNode.Flag; conditions reuse the INFO/alias builder; maxConcurrentQuests uint.
+            # SMEN additionally REQUIRES eventType (StoryManagerEventNode.Types — what the node listens
+            # for); SMBN is a flag/condition grouping node with no event.
+            for fld in ("parent", "previousSibling"):
+                if r.get(fld) is not None:
+                    rec[fld] = str(r[fld]).strip()
+            if rtype.lower() == "smen":
+                if not str(r.get("eventType", "")).strip():
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}] (smen) needs an 'eventType' "
+                        f"(StoryManagerEventNode.Types name, e.g. ScriptEvent|QuestStart|KillActorEvent)",
+                        {})
+                rec["eventType"] = str(r["eventType"]).strip()
+            flags = r.get("flags")
+            if flags is not None:
+                if not isinstance(flags, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].flags must be a list of flag names", {})
+                rec["flags"] = [str(x).strip() for x in flags]
+            if r.get("maxConcurrentQuests") is not None:
+                try:
+                    mcq = int(r["maxConcurrentQuests"])
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].maxConcurrentQuests must be an integer", {})
+                if mcq < 0:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].maxConcurrentQuests must be >= 0", {})
+                rec["maxConcurrentQuests"] = mcq
+            if r.get("conditions") is not None:
+                rec["conditions"] = _norm_conditions(
+                    r["conditions"], f"spec.records[{i}].conditions")
         elif rtype.lower() in ("activator", "location"):
             # W6.5 ACTI / W8 LCTN — name (generic) + keywords; location also parentLocation.
             if rtype.lower() == "location" and r.get("parentLocation") is not None:
                 rec["parentLocation"] = str(r["parentLocation"]).strip()
+            # ACTI Model(+MSWP) + OBND (2026-06-26): scripted workshop ACTI (showcase board) needs a
+            # world mesh + placement bounds. CLI does the authoritative FormKey/Int16 construction.
+            if rtype.lower() == "activator":
+                for fld in ("model", "materialSwap"):
+                    if r.get(fld) is not None:
+                        rec[fld] = str(r[fld]).strip()
+                ob = r.get("objectBounds")
+                if ob is not None:
+                    if not isinstance(ob, list) or len(ob) != 6:
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].objectBounds must be [x1,y1,z1,x2,y2,z2]", {})
+                    try:
+                        obi = [int(v) for v in ob]
+                    except (TypeError, ValueError):
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].objectBounds must be 6 integers", {})
+                    if any(v < -32768 or v > 32767 for v in obi):
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].objectBounds values must be Int16 (-32768..32767)", {})
+                    rec["objectBounds"] = obi
             kws = r.get("keywords")
             if kws is not None:
                 if not isinstance(kws, list):
@@ -2251,6 +2731,227 @@ def fo4_create_record(
                         _norm_script_entry(s, f"spec.records[{i}].scripts[{j}]")
                         for j, s in enumerate(acti_scripts)
                     ]
+        elif rtype.lower() == "outfit":
+            # OS-14 OTFT — items = a bare FormLink list of worn pieces (ARMO/LVLI/NPC_).
+            items = r.get("items")
+            if items is not None:
+                if not isinstance(items, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].items must be a list", {})
+                norm_otft: list[str] = []
+                for j, it in enumerate(items):
+                    if not str(it).strip():
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].items[{j}] must be a non-empty FormKey", {})
+                    norm_otft.append(str(it).strip())
+                rec["items"] = norm_otft
+        elif rtype.lower() in ("static", "door", "light", "container",
+                               "ingestible", "ingredient"):
+            # OS-02 — common world base records. They share model/materialSwap/keywords/flags;
+            # LIGH/ALCH add value/weight/radius; CONT adds inventory; ALCH/INGR add effects.
+            # The CLI does the authoritative FormKey/enum parse + master auto-add.
+            for fld in ("model", "materialSwap"):
+                if r.get(fld) is not None:
+                    rec[fld] = str(r[fld]).strip()
+            kws = r.get("keywords")
+            if kws is not None:
+                if not isinstance(kws, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].keywords must be a list", {})
+                rec["keywords"] = [str(k).strip() for k in kws]
+            flags = r.get("flags")
+            if flags is not None:
+                if not isinstance(flags, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].flags must be a list of flag names", {})
+                rec["flags"] = [str(x).strip() for x in flags]
+            if r.get("value") is not None:
+                try:
+                    bval = int(r["value"])
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].value must be an integer", {})
+                if bval < 0:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].value must be >= 0", {"value": bval})
+                rec["value"] = bval
+            if r.get("weight") is not None:
+                try:
+                    bwt = float(r["weight"])
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].weight must be a number", {})
+                if bwt < 0:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].weight must be >= 0", {"weight": bwt})
+                rec["weight"] = bwt
+            ob = r.get("objectBounds")
+            if ob is not None:
+                if not isinstance(ob, list) or len(ob) != 6:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be [x1,y1,z1,x2,y2,z2]", {})
+                try:
+                    obi = [int(v) for v in ob]
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds must be 6 integers", {})
+                if any(v < -32768 or v > 32767 for v in obi):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].objectBounds values must be Int16 (-32768..32767)", {})
+                rec["objectBounds"] = obi
+            # LIGH radius (UInt32)
+            if rtype.lower() == "light" and r.get("radius") is not None:
+                try:
+                    rad = int(r["radius"])
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].radius must be an integer", {})
+                if rad < 0:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].radius must be >= 0", {"radius": rad})
+                rec["radius"] = rad
+            # CONT inventory ([{item, count>=0}]) — reuses the NPC inventory shape.
+            if rtype.lower() == "container":
+                inv = r.get("inventory") if r.get("inventory") is not None else r.get("items")
+                if inv is not None:
+                    if not isinstance(inv, list):
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].inventory must be a list", {})
+                    norm_inv: list[dict[str, Any]] = []
+                    for j, it in enumerate(inv):
+                        if not isinstance(it, dict) or not str(it.get("item", "")).strip():
+                            raise Fo4McpError(
+                                ErrorCode.INVALID_ARGUMENT,
+                                f"spec.records[{i}].inventory[{j}] needs an 'item' FormKey", {})
+                        try:
+                            count = int(it.get("count", 1))
+                        except (TypeError, ValueError):
+                            raise Fo4McpError(
+                                ErrorCode.INVALID_ARGUMENT,
+                                f"spec.records[{i}].inventory[{j}].count must be an integer", {})
+                        if count < 0:
+                            raise Fo4McpError(
+                                ErrorCode.INVALID_ARGUMENT,
+                                f"spec.records[{i}].inventory[{j}].count must be >= 0",
+                                {"count": count})
+                        norm_inv.append({"item": str(it["item"]).strip(), "count": count})
+                    rec["inventory"] = norm_inv
+            # ALCH/INGR effects ([{baseEffect required, magnitude, area, duration}]).
+            if rtype.lower() in ("ingestible", "ingredient"):
+                effs = r.get("effects")
+                if effs is not None:
+                    if not isinstance(effs, list):
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].effects must be a list", {})
+                    norm_effs: list[dict[str, Any]] = []
+                    for j, ef in enumerate(effs):
+                        if not isinstance(ef, dict) or not str(ef.get("baseEffect", "")).strip():
+                            raise Fo4McpError(
+                                ErrorCode.INVALID_ARGUMENT,
+                                f"spec.records[{i}].effects[{j}] needs a 'baseEffect' FormKey", {})
+                        try:
+                            mag = float(ef.get("magnitude", 0))
+                            area = int(ef.get("area", 0))
+                            dur = int(ef.get("duration", 0))
+                        except (TypeError, ValueError):
+                            raise Fo4McpError(
+                                ErrorCode.INVALID_ARGUMENT,
+                                f"spec.records[{i}].effects[{j}] magnitude/area/duration must be numbers",
+                                {})
+                        norm_effs.append({
+                            "baseEffect": str(ef["baseEffect"]).strip(),
+                            "magnitude": mag, "area": area, "duration": dur,
+                        })
+                    rec["effects"] = norm_effs
+        elif rtype.lower() in ("constructibleobject", "cobj"):
+            # OS-08 COBJ recipe — createdObject + workbenchKeyword required; components
+            # [{component, count 0..65535}]; categories = KYWD FormLink list; conditions reuse
+            # _norm_conditions (CLI BuildCondition is authoritative). createdObjectCount >= 0.
+            co = str(r.get("createdObject", "")).strip()
+            if not co:
+                raise Fo4McpError(
+                    ErrorCode.INVALID_ARGUMENT,
+                    f"spec.records[{i}] (constructibleObject) needs 'createdObject' (output FormKey)",
+                    {})
+            rec["createdObject"] = co
+            wb = str(r.get("workbenchKeyword", "")).strip()
+            if not wb:
+                raise Fo4McpError(
+                    ErrorCode.INVALID_ARGUMENT,
+                    f"spec.records[{i}] (constructibleObject) needs 'workbenchKeyword'", {})
+            rec["workbenchKeyword"] = wb
+            if r.get("createdObjectCount") is not None:
+                try:
+                    coc = int(r["createdObjectCount"])
+                except (TypeError, ValueError):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].createdObjectCount must be an integer", {})
+                if not 0 <= coc <= 65535:
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].createdObjectCount out of range (0..65535)",
+                        {"createdObjectCount": coc})
+                rec["createdObjectCount"] = coc
+            if r.get("menuArtObject") is not None:
+                rec["menuArtObject"] = str(r["menuArtObject"]).strip()
+            comps = r.get("components")
+            if comps is not None:
+                if not isinstance(comps, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].components must be a list", {})
+                norm_comps: list[dict[str, Any]] = []
+                for j, c in enumerate(comps):
+                    if not isinstance(c, dict) or not str(c.get("component", "")).strip():
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].components[{j}] needs a 'component' FormKey", {})
+                    try:
+                        cnt = int(c.get("count", 1))
+                    except (TypeError, ValueError):
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].components[{j}].count must be an integer", {})
+                    if not 1 <= cnt <= 65535:
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].components[{j}].count out of range (1..65535)",
+                            {"count": cnt})
+                    norm_comps.append({"component": str(c["component"]).strip(), "count": cnt})
+                rec["components"] = norm_comps
+            cats = r.get("categories")
+            if cats is not None:
+                if not isinstance(cats, list):
+                    raise Fo4McpError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        f"spec.records[{i}].categories must be a list", {})
+                norm_cats: list[str] = []
+                for j, cat in enumerate(cats):
+                    if not str(cat).strip():
+                        raise Fo4McpError(
+                            ErrorCode.INVALID_ARGUMENT,
+                            f"spec.records[{i}].categories[{j}] must be a non-empty FormKey", {})
+                    norm_cats.append(str(cat).strip())
+                rec["categories"] = norm_cats
+            if r.get("conditions") is not None:
+                rec["conditions"] = _norm_conditions(
+                    r["conditions"], f"spec.records[{i}].conditions")
         elif rtype.lower() == "encounterzone":
             # W8 ECZN — flags + location/owner FormLinks + min/max level + rank (0..255).
             flags = r.get("flags")
@@ -2407,7 +3108,7 @@ def fo4_create_record(
             cli,
             ["create", "--spec", str(spec_file), "--out", str(out), *masters_args],
             timeout=cfg.subprocess_timeout,
-            env_extra=_spriggit_env(),  # ensure the net9 runtime is discoverable
+            env_extra=_spriggit_env(cfg),  # ensure the net9 runtime is discoverable
         )
 
     if not result.ok or not out.exists():
@@ -2519,7 +3220,7 @@ def _cell_info(cfg: Config, manifest: Manifest, source: Path, cell: str) -> dict
     record = cell.split(":", 1)[0] if ":" in cell else cell
     result = run_tool(
         cli, ["cell-info", "--plugin", str(source), "--record", record],
-        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
     if not result.stdout.strip():
         raise Fo4McpError(
             ErrorCode.SUBPROCESS_FAILED, "mutagen-cli cell-info failed",
@@ -2584,7 +3285,7 @@ def _cell_navmesh_list(cfg: Config, manifest: Manifest, plugin: Path) -> list[di
             {"tool": "mutagen-cli"})
     result = run_tool(
         cli, ["cell-navmesh-list", "--plugin", str(plugin)],
-        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
     if not result.stdout.strip():
         raise Fo4McpError(
             ErrorCode.SUBPROCESS_FAILED, "mutagen-cli cell-navmesh-list failed",
@@ -2594,6 +3295,36 @@ def _cell_navmesh_list(cfg: Config, manifest: Manifest, plugin: Path) -> list[di
     except json.JSONDecodeError:
         raise Fo4McpError(
             ErrorCode.SUBPROCESS_OUTPUT_UNPARSEABLE, "cell-navmesh-list emitted no JSON",
+            {"stdout_tail": result.stdout[-500:]})
+
+
+def _dialogue_dump(
+    cfg: Config, manifest: Manifest, plugin: Path, quest: str
+) -> dict[str, Any]:
+    """Run the mutagen-cli dialogue-dump verb -> a quest's player-dialogue wiring
+    (DLBR + DIAL + INFO) re-read from the on-disk binary: per-INFO setStageOnBegin/
+    setStageOnEnd (SNAM), the TIF VMAD fragment subtree, link/scene fields, and each
+    condition's correctly-rendered params (OS-13). Read-only; the round-trip seam the
+    dialogue tests assert against. Mirrors _cell_navmesh_list."""
+    import json
+    cli = _mutagen_cli_binary(cfg, manifest)
+    if cli is None:
+        raise Fo4McpError(
+            ErrorCode.TOOL_BINARY_MISSING,
+            "mutagen-cli not built (tools/mutagen-cli/) — required for dialogue-dump",
+            {"tool": "mutagen-cli"})
+    result = run_tool(
+        cli, ["dialogue-dump", "--plugin", str(plugin), "--quest", quest],
+        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
+    if not result.stdout.strip():
+        raise Fo4McpError(
+            ErrorCode.SUBPROCESS_FAILED, "mutagen-cli dialogue-dump failed",
+            {"exit_code": result.exit_code, "stderr_tail": result.stderr[-500:]})
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise Fo4McpError(
+            ErrorCode.SUBPROCESS_OUTPUT_UNPARSEABLE, "dialogue-dump emitted no JSON",
             {"stdout_tail": result.stdout[-500:]})
 
 
@@ -2685,7 +3416,7 @@ def _voice_handoff_list(
     args = ["voice-handoff", "--plugin", str(plugin)]
     if cfg.fo4_install_dir is not None and (cfg.fo4_install_dir / "Data").is_dir():
         args += ["--masters-dir", str(cfg.fo4_install_dir / "Data")]
-    result = run_tool(cli, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+    result = run_tool(cli, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
     if not result.stdout.strip():
         raise Fo4McpError(
             ErrorCode.SUBPROCESS_FAILED, "mutagen-cli voice-handoff failed",
@@ -2815,6 +3546,32 @@ def fo4_release_preflight(cfg: Config, manifest: Manifest, plugin: str) -> dict[
     except Fo4McpError as e:
         findings.append({"level": "warning", "rule": "eligibility_unavailable", "section": "format",
             "message": f"ESL eligibility check unavailable: {e.message}"})
+
+    # --- real TES4 master/light flag vs required format (OS-18) ---
+    # The eligibility check above only knows what the content REQUIRES; this reads
+    # the plugin's ACTUAL header flags (via fo4_plan_plugin_format -> _read_tes4_flags)
+    # and catches a real mismatch so a wrong-flag plugin no longer ships silently.
+    # The structurally-invalid combo (light-flagged + new cells; previs can't live
+    # in FE-space) is prefixed "CRITICAL" by the planner -> ship-blocking error;
+    # softer mismatches (master flag simply not set yet) -> review warning.
+    try:
+        from .plugin_format import fo4_plan_plugin_format
+        pf = fo4_plan_plugin_format(cfg, str(plugin_path))["data"]
+        sections["format_flags"] = {
+            "current_format":           pf.get("current_format"),
+            "required_format":          pf.get("required_format"),
+            "is_esm":                   pf.get("is_esm"),
+            "is_light":                 pf.get("is_light"),
+            "current_matches_required": pf.get("current_matches_required"),
+        }
+        for conflict in pf.get("conflicts", []):
+            findings.append({
+                "level": "error" if conflict.startswith("CRITICAL") else "warning",
+                "rule": "plugin_flag_mismatch", "section": "format",
+                "message": conflict})
+    except Fo4McpError as e:
+        findings.append({"level": "warning", "rule": "format_flags_unavailable", "section": "format",
+            "message": f"plugin-format flag check unavailable: {e.message}"})
 
     # --- navmesh handoff roll-up ---
     try:
@@ -2988,7 +3745,7 @@ def fo4_inspect_sm_tree(
     cmd = ["sm-tree", "--plugin", str(pp)]
     if node:
         cmd += ["--record", node]
-    result = run_tool(cli, cmd, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+    result = run_tool(cli, cmd, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
     if not result.stdout.strip():
         raise Fo4McpError(
             ErrorCode.SUBPROCESS_FAILED, "mutagen-cli sm-tree failed",
@@ -3043,7 +3800,7 @@ def fo4_lint_npc_template(cfg: Config, manifest: Manifest, plugin_path: str) -> 
 
     result = run_tool(
         cli, ["lint-npc", "--plugin", str(ppath)],
-        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(),
+        timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg),
     )
     if not result.ok:
         raise Fo4McpError(
@@ -3243,7 +4000,7 @@ def fo4_check_esl_eligibility(cfg: Config, manifest: Manifest, plugin: str) -> d
             "-p", _SPRIGGIT_PACKAGE,
             "-v", version,
         ]
-        result = run_tool(binary, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+        result = run_tool(binary, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
         if not out_dir.exists():
             raise Fo4McpError(
                 ErrorCode.SUBPROCESS_FAILED,
@@ -3710,18 +4467,28 @@ def _spriggit_version(manifest: Manifest, override: str | None) -> str:
     return (entry.version if entry and entry.version else "0.40.1")
 
 
-def _spriggit_env() -> dict[str, str]:
+def _spriggit_env(cfg: Config | None = None) -> dict[str, str]:
     """Ensure a net9-capable dotnet is discoverable by the Spriggit subprocess.
 
     Spriggit resolves its serialization engine via `dotnet tool install`, which
     needs the .NET 9 SDK on PATH (see research/p0/spriggit/2026-05-15-roundtrip).
     `~/.dotnet` is normally on PATH already, but we prepend it defensively so
-    the tool works even when the server is launched from a bare environment."""
+    the tool works even when the server is launched from a bare environment.
+
+    The engine is installed under %TEMP%/Spriggit/Translations, and Spriggit does
+    not recover from a half-installed copy there ("Could not locate entry
+    point"). With a cfg, TEMP/TMP point at the gitignored <tools>/runtime-tmp so
+    the engine cache is repo-local instead of depending on the user's temp dir."""
     import os
+    env: dict[str, str] = {}
     dotnet_dir = Path(os.path.expanduser("~/.dotnet"))
     if dotnet_dir.exists():
-        return {"PATH": f"{dotnet_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
-    return {}
+        env["PATH"] = f"{dotnet_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+    if cfg is not None:
+        tmp = cfg.tools_dir / "runtime-tmp"
+        tmp.mkdir(parents=True, exist_ok=True)
+        env["TEMP"] = env["TMP"] = str(tmp)
+    return env
 
 
 def fo4_spriggit_export(
@@ -3771,7 +4538,7 @@ def fo4_spriggit_export(
         "-p", _SPRIGGIT_PACKAGE,
         "-v", version,
     ]
-    result = run_tool(binary, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env())
+    result = run_tool(binary, args, timeout=cfg.subprocess_timeout, env_extra=_spriggit_env(cfg))
     files = sorted(str(p.relative_to(out_path)) for p in out_path.rglob("*") if p.is_file())
 
     return ok({
@@ -3841,7 +4608,7 @@ def fo4_spriggit_import(
     out_plugin.parent.mkdir(parents=True, exist_ok=True)
 
     version = _spriggit_version(manifest, package_version)
-    env = _spriggit_env()
+    env = _spriggit_env(cfg)
 
     def _deserialize(dest: Path) -> "ToolResult":
         dest.parent.mkdir(parents=True, exist_ok=True)
